@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.maxiween.game",
+      "sha256_cert_fingerprints": ["46:C2:08:CE:36:C9:AA:83:CD:A5:CE:CE:E5:EB:C5:A7:DB:55:7A:96:63:D5:44:C3:95:F0:7C:14:4C:62:36:D1"]
+    }
+  }
+]
