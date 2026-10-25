@@ -3,7 +3,7 @@
 // off. It fetches the newest files first (so updates arrive) and falls back
 // to the saved copy.
 
-const CACHE = 'maxiween-v15';
+const CACHE = 'maxiween-v16';
 const FILES = [
   './', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',

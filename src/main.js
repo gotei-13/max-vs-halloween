@@ -516,6 +516,27 @@ function updateShield(dt) {
   room.setCircle(shield.state, shield.progress);
 }
 
+// VR colors: some Quest Browser versions convert colors for the display a second
+// time, which makes everything look pale and washed out. The B / Y button switches
+// to "vivid" (the game skips its own conversion); the choice is remembered.
+let vividColors = false;
+try { vividColors = localStorage.getItem('maxiween-vivid') === '1'; } catch {}
+
+function updateVrColors() {
+  for (const c of controllers) {
+    const pressed = Boolean(c.userData.source?.gamepad?.buttons?.[5]?.pressed);   // B (right) or Y (left)
+    if (pressed && !c.userData.colorButtonDown) {
+      vividColors = !vividColors;
+      try { localStorage.setItem('maxiween-vivid', vividColors ? '1' : '0'); } catch {}
+      hud.toast(vividColors ? 'Colors: vivid (press B again to switch back)' : 'Colors: normal (press B for vivid)', 2);
+    }
+    c.userData.colorButtonDown = pressed;
+  }
+  // in VR the render target is the headset's framebuffer; its color space decides the conversion
+  const target = renderer.getRenderTarget();
+  if (target?.isXRRenderTarget) target.texture.colorSpace = vividColors ? THREE.LinearSRGBColorSpace : THREE.SRGBColorSpace;
+}
+
 // walking: W A S D on the laptop; in VR the left stick walks and the right stick turns
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
@@ -858,5 +879,6 @@ renderer.setAnimationLoop(() => {
   hud.setVisible(mode !== 'none');
   hud.setCrosshair(mode === 'laptop' && state === 'playing');
   hud.update(dt);
+  if (renderer.xr.isPresenting) updateVrColors();
   renderer.render(scene, camera);
 });
