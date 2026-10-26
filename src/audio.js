@@ -203,6 +203,42 @@ export class SpookyAudio {
     }
   }
 
+  // a zombie climbing out of its grave: earth crumbling, then a groan
+  graveRise(voice) {
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 10; i++) {
+      const t0 = t + i * 0.18 + Math.random() * 0.1;
+      const n = this._noiseSource(t0, 0.12);
+      const lp = this._filter('lowpass', 500 + Math.random() * 500);
+      const g = this._envelope(t0, 0.005, 0.1, 0.9);
+      n.connect(lp).connect(g).connect(voice);
+    }
+    this.zombieGroan(voice, 0.9, t + 0.9);
+  }
+
+  // a zombie's groan: low, wet and rough
+  zombieGroan(voice, pitch = 1, at = this.ctx.currentTime) {
+    const dur = 1.3 + Math.random() * 0.6;
+    this._vocal(voice, at, dur, 115 * pitch, 85 * pitch, 'o', 0.6, { vibrato: 17, depth: 9, attack: 0.25 });
+    const n = this._noiseSource(at, dur);
+    const bp = this._filter('bandpass', 400, 2);
+    const g = this._envelope(at, 0.2, dur, 0.3);
+    n.connect(bp).connect(g).connect(voice);
+  }
+
+  // a zombie's step: a heavy foot and the other one dragging over the ground
+  dragStep(voice, pitch = 1) {
+    const t = this.ctx.currentTime;
+    this._thud(voice, t, 150 * pitch, 1.4, 0.15);
+    const n = this._noiseSource(t + 0.1, 0.4);
+    const bp = this._filter('bandpass', 900, 1.2);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, t + 0.1);
+    g.gain.linearRampToValueAtTime(0.45, t + 0.2);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.48);
+    n.connect(bp).connect(g).connect(voice);
+  }
+
   // a werewolf: a long howl rising and falling
   howl(voice) {
     const t = this.ctx.currentTime;
@@ -649,6 +685,13 @@ export class SpookyAudio {
       this._thud(this.master, t0, 160, 1.1, 0.14);
       if (i % 2) this._creak(this.master, t0 + 0.02, 0.35, 0.1);
     }
+  }
+
+  // an extra life: a warm chord of bells and a short choir "aah"
+  lifePickup() {
+    const t = this.ctx.currentTime;
+    [523, 659, 784].forEach((f, i) => this._bell(this.master, f, t + i * 0.08, 0.16, 1.6));
+    for (const f of [262, 330, 392]) this._vocal(this.master, t + 0.1, 1.4, f, f, 'a', 0.07, { vibrato: 5, depth: 2, attack: 0.3 });
   }
 
   // escaped! bells and a bright choir

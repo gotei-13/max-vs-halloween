@@ -3,7 +3,7 @@ import { SpookyAudio } from './audio.js';
 import { createRoom } from './room.js';
 import { createHallway, createStairwell, createFoyer, createYard } from './house.js';
 import { Ghost } from './ghost.js';
-import { Key } from './key.js';
+import { Key, LifePumpkin } from './key.js';
 import { Hud } from './hud.js';
 import { Trail } from './trail.js';
 import { SpellFx } from './fx.js';
@@ -25,17 +25,18 @@ const CAST_COOLDOWN = 0.5;
 // stereo: how hard sounds are pushed into the left/right ear (0 = real 3D sound only)
 // glitch: seconds between a ghost briefly glitching into view (a clue where it is)
 // horror: how often the big scary moments come (blackout, shadow figure, writing, door)
+// lives / maxLives: pumpkins at the start of a run, and the most you can collect
 const DIFFICULTIES = {
   easy: {
-    aim: 35, speed: 0.35, speedStep: 0.03, maxSpeed: 1.0, maxGhosts: 1, trail: 0.9, stereo: 0.8, glitch: [5, 8], horror: 0.8,
+    aim: 35, speed: 0.35, speedStep: 0.03, maxSpeed: 1.0, maxGhosts: 1, trail: 0.9, stereo: 0.8, glitch: [5, 8], horror: 0.8, lives: 4, maxLives: 6,
     note: 'Glowing traces show where ghosts move · slow ghosts · one at a time',
   },
   normal: {
-    aim: 22, speed: 0.45, speedStep: 0.05, maxSpeed: 1.4, maxGhosts: 2, trail: 0.35, stereo: 0.5, glitch: [7, 11], horror: 1,
+    aim: 22, speed: 0.45, speedStep: 0.05, maxSpeed: 1.4, maxGhosts: 2, trail: 0.35, stereo: 0.5, glitch: [7, 11], horror: 1, lives: 3, maxLives: 5,
     note: 'Faint traces · a miss brings a second ghost',
   },
   hard: {
-    aim: 15, speed: 0.55, speedStep: 0.06, maxSpeed: 1.7, maxGhosts: 2, trail: 0, stereo: 0, glitch: [10, 16], horror: 1.3,
+    aim: 15, speed: 0.55, speedStep: 0.06, maxSpeed: 1.7, maxGhosts: 2, trail: 0, stereo: 0, glitch: [10, 16], horror: 1.3, lives: 3, maxLives: 4,
     note: 'Sound only · fast ghosts',
   },
 };
@@ -67,11 +68,11 @@ const AREAS = [
     intro: 'Banish 8. Skeletons need 2 hits! The front door key is here somewhere',
   },
   {
-    build: createYard, label: 'Yard', title: 'THE GRAVEYARD', goal: 9, together: 3, speed: 1.4, chase: 0, chaser: 'werewolf',
-    plan: ['werewolf', 'skeleton', 'bats', 'werewolf', 'wraith', 'skeleton', 'werewolf', 'bats', 'werewolf'],
-    types: ['werewolf', 'skeleton', 'wraith', 'bats', 'shadow'],
-    boss: { hp: 6 }, horde: true,
-    intro: 'Almost out! Banish 9… then the guardian of the gate comes',
+    build: createYard, label: 'Yard', title: 'THE GRAVEYARD', goal: 10, together: 3, speed: 1.4, chase: 0, chaser: 'werewolf',
+    plan: ['zombie', 'zombie', 'werewolf', 'zombie', 'skeleton', 'bats', 'zombie', 'werewolf', 'wraith', 'werewolf'],
+    types: ['zombie', 'zombie', 'werewolf', 'skeleton', 'wraith', 'bats'],
+    boss: { hp: 6 }, horde: ['werewolf', 'zombie'],
+    intro: 'Almost out! The dead are rising. Banish 10… then the guardian of the gate comes',
   },
 ];
 const RUN_SPEED = 2;       // running is this many times faster than walking
@@ -125,6 +126,7 @@ const potion = new Potion(scene, audio);
 const fire = new FireCrystal(scene, audio);
 const horror = new Horror(scene, audio, room);
 const key = new Key(scene, audio);
+const lifePumpkin = new LifePumpkin(scene, audio);
 
 // a glowing golden ring on the floor, with sparkles rising from it, where the way out is
 const exitMarker = (() => {
@@ -175,9 +177,10 @@ const GHOST_INTROS = {
   wraith: 'A WRAITH! Listen for its chains. It blinks closer, so be quick!',
   skeleton: 'A SKELETON! Rattling bones. It takes 2 hits!',
   werewolf: 'A WEREWOLF! It howls, then sprints at you. 2 hits!',
+  zombie: 'ZOMBIES! They climb out of the graves. 2 hits!',
 };
-const SPEEDS = { demon: 1.15, shadow: 1.35, bats: 1.1, wraith: 1.25, skeleton: 0.95, werewolf: 1.0 };
-const NAMES = { demon: 'demon', skeleton: 'skeleton', werewolf: 'werewolf' };
+const SPEEDS = { demon: 1.15, shadow: 1.35, bats: 1.1, wraith: 1.25, skeleton: 0.95, werewolf: 1.0, zombie: 0.75 };
+const NAMES = { demon: 'demon', skeleton: 'skeleton', werewolf: 'werewolf', zombie: 'zombie' };
 
 // ---- VR controllers -------------------------------------------------------
 
@@ -245,6 +248,8 @@ let transition = null;  // { t, target, swapped } while fading between areas
 let playStart = 0;
 let progress = 0;       // the furthest area reached (saved)
 let startArea = 0;      // where the next game starts
+let runStart = 0;       // where the current run started (only runs from the bedroom set records)
+let lifeShown = false;  // this area's extra life has appeared
 try { progress = Math.min(AREAS.length - 1, Number(localStorage.getItem('maxiween-progress')) || 0); } catch {}
 startArea = progress;
 const lookDir = new THREE.Vector3();
@@ -287,6 +292,7 @@ function clearWorld() {
   horror.reset();
   audio.stopDread();
   key.hide();
+  lifePumpkin.hide();
   exitMarker.visible = false;
   ghosts = [];
   spells = [];
@@ -333,8 +339,8 @@ function beginArea(index) {
   clearWorld();
   loadArea(index);
   shield.reset();
-  lives = START_LIVES;
   phase = 'fight';
+  lifeShown = false;
   goalDone = 0;
   areaSpawns = 0;
   exitOpen = 0;
@@ -392,10 +398,24 @@ function openExit(message, chasers = 0) {
   }
 }
 
-// a creature that comes after you from behind, fast
+// a creature that comes after you from behind, fast (in the yard: werewolves, or zombies from the graves)
 function spawnChaser() {
+  const a = AREAS[areaIndex];
+  const type = a.horde && phase === 'exit' ? a.horde[Math.floor(Math.random() * a.horde.length)] : a.chaser;
   const angle = playerYaw() + Math.PI + (Math.random() - 0.5) * 0.8;
-  spawnGhost(AREAS[areaIndex].chaser, { angle, chaser: true });
+  spawnGhost(type, { angle, chaser: true });
+}
+
+// a grave for a zombie to climb out of: not too close to the player, not too far
+function pickGrave() {
+  const graves = room.info.graves;
+  if (!graves) return null;
+  const fits = graves.filter((g) => {
+    const d = Math.hypot(g.x - player.x, g.z - player.z);
+    return d > 3.5 && d < 11;
+  });
+  const list = fits.length ? fits : graves;
+  return list[Math.floor(Math.random() * list.length)];
 }
 
 // the player walks through the open exit: fade to black and on to the next area
@@ -453,14 +473,51 @@ function escape() {
   scares.reset();
   horror.reset();
   transition = { t: 0, escape: true, swapped: false };
-  const seconds = Math.round(now - playStart);
-  const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-  const line = `You banished ${score} creature${score === 1 ? '' : 's'} in ${time}`;
+  const isRecord = recordRun(true);
+  const line = `${isRecord ? 'NEW RECORD! ' : ''}${score} banished in ${formatTime(Math.round(now - playStart))}`;
   if (mode === 'vr') {
     setTimeout(() => vrMenu.show({ title: 'YOU ESCAPED!', subtitle: line, action: 'PLAY AGAIN' }, camera), 2500);
   } else {
     hud.setMessage('YOU ESCAPED!', `${line}\nClick to play again`);
   }
+}
+
+// ---- best runs (per difficulty, saved on this device) ----------------------
+
+function loadBest(name = level) {
+  try { return JSON.parse(localStorage.getItem(`maxiween-best-${name}`)) || null; } catch { return null; }
+}
+
+// how good a run is: escaping beats everything (faster is better), then how far you got and how many you banished
+function runValue(run) {
+  return run.escaped ? 1e6 - run.time : run.area * 1e4 + run.score;
+}
+
+function formatTime(seconds) {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function describeRun(run) {
+  if (!run) return '';
+  return run.escaped
+    ? `escaped in ${formatTime(run.time)} · ${run.score} banished`
+    : `reached the ${AREAS[run.area].label.toLowerCase()} · ${run.score} banished`;
+}
+
+// save this run if it beats the best one; returns true for a new record
+function recordRun(escaped) {
+  if (runStart !== 0) return false;   // runs started further in don't count
+  const run = { escaped, area: areaIndex, score, time: Math.round(now - playStart) };
+  const best = loadBest();
+  if (best && runValue(best) >= runValue(run)) return false;
+  try { localStorage.setItem(`maxiween-best-${level}`, JSON.stringify(run)); } catch {}
+  showBest();
+  return true;
+}
+
+function showBest() {
+  const best = loadBest();
+  bestNote.textContent = best ? `Best on ${level}: ${describeRun(best)}` : 'No record yet on this level: escape the house to set one!';
 }
 
 // the red demon guards the gate
@@ -490,10 +547,7 @@ function tryStart() {
     return true;
   }
   if (state === 'over' || state === 'escaped') {
-    if (now - overAt > RESTART_DELAY) {
-      if (state === 'over') beginArea(areaIndex);   // checkpoint: try this area again
-      else startGame(0);
-    }
+    if (now - overAt > RESTART_DELAY) startGame(state === 'over' ? runStart : 0);   // a whole new run
     return true;
   }
   return false;
@@ -502,6 +556,8 @@ function tryStart() {
 // a new run through the house, from the chosen area
 function startGame(from = startArea) {
   score = 0;
+  lives = cfg.lives;
+  runStart = from;
   seenTypes.clear();
   playStart = now;
   audio.start();
@@ -520,10 +576,14 @@ function gameOver() {
   audio.gameOver();
   key.hide();
   exitMarker.visible = false;
-  const where = `The ${AREAS[areaIndex].label.toLowerCase()} got you…`;
-  // in VR the menu panel with "Try again" follows shortly (see updateGame)
-  hud.setMessage('GAME OVER', mode === 'vr' ? where : `${where}\nClick to try this part again`);
+  lifePumpkin.hide();
+  const isRecord = recordRun(false);
+  gameOverLine = `${isRecord ? 'NEW RECORD! ' : ''}The ${AREAS[areaIndex].label.toLowerCase()} got you · ${score} banished`;
+  // in VR the menu panel with "Play again" follows shortly (see updateGame)
+  hud.setMessage('GAME OVER', mode === 'vr' ? gameOverLine : `${gameOverLine}\nClick to play again from the start`);
 }
+
+let gameOverLine = '';
 
 function scheduleSpawn(delay) {
   spawnTimes.push(now + delay);
@@ -544,6 +604,11 @@ function nextAreaType() {
 
 function spawnGhost(type = nextAreaType(), { angle: fixedAngle, hp, boss = false, chaser = false } = {}) {
   let angle = fixedAngle;
+  const at = type === 'zombie' ? pickGrave() : null;
+  if (at && !seenTypes.has(type)) {
+    seenTypes.add(type);
+    hud.toast(GHOST_INTROS.zombie, 3);
+  }
   const spawnAngles = room.info.spawnAngles;
   if (angle !== undefined) {
     if (!seenTypes.has(type) && GHOST_INTROS[type]) hud.toast(GHOST_INTROS[type], 3);
@@ -573,7 +638,7 @@ function spawnGhost(type = nextAreaType(), { angle: fixedAngle, hp, boss = false
   else if (type === 'wraith') elevation = THREE.MathUtils.randFloat(0.3, 0.8);
   const speed = ghostSpeed() * (SPEEDS[type] || 1) * (chaser ? 1.5 : 1);
   const ghost = new Ghost(scene, audio, {
-    type, angle, elevation, speed, pitch: 0.85 + Math.random() * 0.3, head: player, hp,
+    type, angle, elevation, speed, pitch: 0.85 + Math.random() * 0.3, head: player, hp, at,
   });
   ghost.isBoss = boss;
   ghosts.push(ghost);
@@ -680,7 +745,26 @@ function onHit(ghost, controller, damage = 1) {
   goalDone++;
   const need = AREAS[areaIndex].goal;
   if (goalDone >= need) onGoalReached();
-  else hud.toast(`Banished! ${goalDone} of ${need}`, 1.4);
+  else if (!lifeShown && goalDone >= Math.ceil(need / 2)) {
+    lifeShown = true;
+    const spot = freeSpot();
+    lifePumpkin.show(spot.x, spot.z);
+    hud.toast('An EXTRA LIFE appeared! Listen for its chime and grab it', 3);
+  } else hud.toast(`Banished! ${goalDone} of ${need}`, 1.4);
+}
+
+// a free spot in the area: not in furniture, not on the pentagram, not too close to the player
+function freeSpot() {
+  const { bounds: b, obstacles, circle, keySpot } = room.info;
+  const marginX = Math.min(1, (b.maxX - b.minX) / 2 - 0.5);
+  for (let tries = 0; tries < 40; tries++) {
+    const x = THREE.MathUtils.randFloat(b.minX + marginX, b.maxX - marginX);
+    const z = THREE.MathUtils.randFloat(b.minZ + 1, b.maxZ - 1);
+    if (Math.hypot(x - circle.x, z - circle.z) < 1.8 || Math.hypot(x - player.x, z - player.z) < 3) continue;
+    if (obstacles.some(([x0, x1, z0, z1]) => x > x0 - 0.5 && x < x1 + 0.5 && z > z0 - 0.5 && z < z1 + 0.5)) continue;
+    return { x, z };
+  }
+  return keySpot || { x: circle.x + 1.5, z: circle.z };
 }
 
 function onMiss() {
@@ -726,6 +810,12 @@ function updateGame(dt) {
     spawnTimes = spawnTimes.filter((t) => t > now);
     for (let i = 0; i < due.length; i++) spawnGhost();
     if (huntingGhosts().length + spawnTimes.length < together()) scheduleSpawn(1.2 + Math.random() * 1.8);
+  }
+  if (state === 'playing' && lifePumpkin.update(dt, player) === 'picked') {
+    lives = Math.min(cfg.maxLives, lives + 1);
+    hud.announce('+1 LIFE', `${lives} lives`, 2);
+    hud.flash(0xff9a40, 0.3);
+    for (const c of controllers) pulse(c, 0.6, 150);
   }
   if (state === 'playing' && phase === 'key' && key.update(dt, player) === 'picked') {
     const a = AREAS[areaIndex];
@@ -796,14 +886,14 @@ function updateGame(dt) {
     hud.setMessage();
     vrMenu.show({
       title: 'GAME OVER',
-      subtitle: `The ${AREAS[areaIndex].label.toLowerCase()} got you… try this part again`,
-      action: 'TRY AGAIN',
+      subtitle: gameOverLine,
+      action: 'PLAY AGAIN',
     }, camera);
   }
 
   updateSpells(dt);
   hud.setStatus({
-    lives, maxLives: START_LIVES, score,
+    lives, maxLives: Math.max(cfg.lives, lives), score,
     shield: state === 'playing' ? { state: shield.state, seconds: shield.secondsLeft, progress: shield.progress } : null,
     vision: potion.visionActive ? potion.secondsLeft : 0,
     goal: state === 'playing' && phase === 'fight' ? { done: goalDone, need: AREAS[areaIndex].goal } : null,
@@ -987,7 +1077,7 @@ function onMenuPick(id) {
   else if (kind === 'style') setRoomStyle(value);
   else if (kind === 'area') setStartArea(Number(value));
   else if (kind === 'start') {
-    if (state === 'over') beginArea(areaIndex);   // TRY AGAIN: this part of the house
+    if (state === 'over') startGame(runStart);   // PLAY AGAIN: a whole new run
     else startGame(state === 'escaped' ? 0 : startArea);
   }
 }
@@ -1049,6 +1139,7 @@ const vrNote = document.getElementById('vr-note');
 const styleButtons = document.querySelectorAll('#styles button');
 const levelButtons = document.querySelectorAll('#levels .level');
 const levelNote = document.getElementById('level-note');
+const bestNote = document.getElementById('best-note');
 
 function setLevel(name, remember = true) {
   if (!DIFFICULTIES[name]) return;
@@ -1059,7 +1150,9 @@ function setLevel(name, remember = true) {
   horror.intensity = cfg.horror;
   trail.brightness = cfg.trail;
   levelNote.textContent = cfg.note;
-  vrMenu.setSelection({ level: name, levelNote: cfg.note });
+  showBest();
+  const best = loadBest(name);
+  vrMenu.setSelection({ level: name, levelNote: best ? `Best: ${describeRun(best)}` : cfg.note });
   for (const b of levelButtons) b.classList.toggle('selected', b.dataset.level === name);
   if (remember) {
     try { localStorage.setItem('maxiween-level', name); } catch {}
@@ -1238,7 +1331,8 @@ function updateWandTips(dt) {
 if (new URLSearchParams(location.search).has('debug')) window.debug = {
   renderer, scene, camera, vrMenu, rig, shield, scares, potion, horror, key,
   room: () => room,
-  info: () => ({ lives, score, state, dread: Boolean(audio.dread), area: room.info.id, phase, goalDone, progress }),
+  info: () => ({ lives, score, state, dread: Boolean(audio.dread), area: room.info.id, phase, goalDone, progress, best: loadBest() }),
+  lifePumpkin,
   // jump to a part of the house: debug.goto(1)
   goto: (index) => beginArea(index),
   reachGoal: () => { goalDone = AREAS[areaIndex].goal; onGoalReached(); },
@@ -1257,7 +1351,7 @@ if (new URLSearchParams(location.search).has('debug')) window.debug = {
 
 const clock = new THREE.Clock();
 showReady();
-hud.setStatus({ lives, maxLives: START_LIVES, score });
+hud.setStatus({ lives, maxLives: cfg.lives, score });
 hud.setCrosshair(false);
 
 renderer.setAnimationLoop(() => {

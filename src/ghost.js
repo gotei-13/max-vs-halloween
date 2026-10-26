@@ -14,6 +14,8 @@ import * as THREE from '../vendor/three.module.js';
 //   wraith  - a dark flying spirit with rattling chains that blinks closer every few seconds
 //   skeleton- rattling bones on the floor, 2 hits
 //   werewolf- howls when it arrives, then sprints at you in bursts, 2 hits
+//   zombie  - climbs out of a grave, then shambles at you with its arms out, 2 hits
+// Skeletons, werewolves and zombies have real bodies with walking legs: you can see them.
 
 export const GHOST_TYPES = ['walker', 'flyer', 'crawler'];
 
@@ -30,6 +32,8 @@ const GLITCH_TIME = 0.45;
 const GLITCH_COLORS = [0x66ffd9, 0xff3ad0, 0xffffff, 0xff2a1a, 0x7a5cff].map((c) => new THREE.Color(c));
 const FREEZE_ANGLE = Math.cos(THREE.MathUtils.degToRad(35));   // a shadow freezes inside this view cone
 const BATS = 7;
+const SOLID = ['zombie', 'skeleton', 'werewolf'];   // creatures with a body you can see
+const RISE_TIME = 2.2;                              // seconds a zombie takes to climb out of its grave
 const _look = new THREE.Vector3();
 
 let shared = null;
@@ -55,7 +59,8 @@ export class Ghost {
   // angle: direction around you (0 = straight ahead of the room's door wall)
   // elevation: radians above (+) or below (-) your head, for flyers/crawlers
   // hp: spell hits needed (the final boss gets more)
-  constructor(scene, audio, { type = 'walker', angle, elevation = 0, speed, pitch, head, hp }) {
+  // at: { x, z } to appear at a fixed spot (a zombie's grave) instead of coming from `angle`
+  constructor(scene, audio, { type = 'walker', angle, elevation = 0, speed, pitch, head, hp, at }) {
     this.scene = scene;
     this.audio = audio;
     this.type = type;
@@ -63,19 +68,24 @@ export class Ghost {
     this.pitch = pitch;
     this.state = 'hunting';  // hunting -> dying | scare -> gone
     this.doomed = false;     // a spell is on its way to it
-    this.onFloor = ['walker', 'demon', 'shadow', 'skeleton', 'werewolf'].includes(type);
+    this.onFloor = ['walker', 'demon', 'shadow', 'skeleton', 'werewolf', 'zombie'].includes(type);
+    this.solid = SOLID.includes(type);
     this.damage = type === 'demon' ? 2 : 1;
-    this.hp = hp ?? ({ demon: 3, skeleton: 2, werewolf: 2 }[type] || 1);   // spell hits needed to banish it
+    this.hp = hp ?? ({ demon: 3, skeleton: 2, werewolf: 2, zombie: 2 }[type] || 1);   // spell hits needed to banish it
+    this.rise = type === 'zombie' && at ? RISE_TIME : 0;
+    this.walkPhase = 0;
     this.hurtGlow = 0;
     this.glitchTime = 0;      // > 0 while the ghost glitches into view
     this.glitchTimer = -2;    // seconds until the next glitch (set by the game on its first frame)
-    this.catchRadius = ['demon', 'bats', 'werewolf'].includes(type) ? 0.8 : CATCH_RADIUS;
+    this.catchRadius = ['demon', 'bats', 'werewolf', 'zombie'].includes(type) ? 0.8 : CATCH_RADIUS;
     this.baseScale = { demon: 1.2, shadow: 1.1, werewolf: 1.15, skeleton: 0.95 }[type] || 1;
     this.burstTimer = 3 + Math.random() * 2;   // werewolf: seconds until the next sprint
     this.bursting = 0;                         // werewolf: seconds of sprint left
     this.blinkTimer = 3 + Math.random() * 1.5; // wraith: seconds until it blinks closer
     this.frozen = false;      // a shadow that is being looked at
-    if (this.onFloor) {
+    if (at) {
+      this.pos = new THREE.Vector3(at.x, BODY_Y, at.z);
+    } else if (this.onFloor) {
       this.pos = new THREE.Vector3(head.x + Math.sin(angle) * WALK_RADIUS, BODY_Y, head.z - Math.cos(angle) * WALK_RADIUS);
     } else {
       const flat = Math.cos(elevation);
@@ -122,12 +132,14 @@ export class Ghost {
         this.group.add(bat);
         this.bats.push(bat);
       }
+    } else if (this.solid) {
+      this._buildFigure(type);
     } else {
       const body = new THREE.Mesh(g.body, this.bodyMat);
       body.renderOrder = 10;
       this.group.add(body);
     }
-    if (demon || type === 'werewolf') {
+    if ((demon || type === 'werewolf') && !this.solid) {
       // horns for the demon, pointed ears for the werewolf
       for (const s of [-1, 1]) {
         const horn = new THREE.Mesh(g.horn, this.bodyMat);
@@ -140,7 +152,7 @@ export class Ghost {
     }
     this.group.scale.setScalar(this.baseScale);
     this.baseColor = this.bodyMat.color.clone();
-    for (const x of type === 'bats' ? [] : [-0.11, 0.11]) {
+    for (const x of type === 'bats' || this.solid ? [] : [-0.11, 0.11]) {
       const eye = new THREE.Mesh(g.eye, this.eyeMat);
       eye.renderOrder = 11;
       eye.position.set(x, 1.45, 0.33);
@@ -156,6 +168,7 @@ export class Ghost {
     this._syncAudio();
     if (type === 'werewolf') audio.howl(this.body);   // you hear it coming from far away
     if (type === 'wraith') audio.chains(this.body);
+    if (this.rise > 0) audio.graveRise(this.body);
   }
 
   get alive() {
@@ -212,9 +225,110 @@ export class Ghost {
     else this.audio.roar(this.body);
   }
 
+  // a body for skeletons, werewolves and zombies: legs and arms that swing as they walk
+  _buildFigure(type) {
+    const geos = [];
+    const box = (w, h, d) => {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      geos.push(geo);
+      return geo;
+    };
+    const lambert = (color) => new THREE.MeshLambertMaterial({ color, transparent: true });
+    const look = {
+      zombie: { skin: 0x6f7d5a, cloth: 0x3b3326, eyes: 0xd8ff60, limb: 0.13, torso: [0.44, 0.62, 0.26], lean: 0.12 },
+      skeleton: { skin: 0xe6dcc4, cloth: 0xe6dcc4, eyes: 0xff2a10, limb: 0.06, torso: [0.34, 0.08, 0.2], lean: 0 },
+      werewolf: { skin: 0x4a3a2c, cloth: 0x2e241c, eyes: 0xffc020, limb: 0.16, torso: [0.56, 0.66, 0.34], lean: 0.4 },
+    }[type];
+    const skin = lambert(look.skin), cloth = lambert(look.cloth);
+    const eyes = new THREE.MeshBasicMaterial({ color: look.eyes, transparent: true });
+    this.figureMats = [skin, cloth, eyes];
+    this.figureGeos = geos;
+    const part = (geo, mat, x, y, z, parent = this.group) => {
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(x, y, z);
+      parent.add(mesh);
+      return mesh;
+    };
+    // legs swing from the hips
+    const legs = [-0.12, 0.12].map((x) => {
+      const hip = new THREE.Group();
+      hip.position.set(x, 0.88, 0);
+      part(box(look.limb, 0.86, look.limb + 0.02), type === 'skeleton' ? skin : cloth, 0, -0.43, 0, hip);
+      this.group.add(hip);
+      return hip;
+    });
+    // the upper body leans forward (a lot for the werewolf)
+    const upper = new THREE.Group();
+    upper.position.y = 0.9;
+    upper.rotation.x = look.lean;
+    this.group.add(upper);
+    if (type === 'skeleton') {
+      part(box(0.05, 0.62, 0.05), skin, 0, 0.3, -0.06, upper);   // spine
+      for (let i = 0; i < 4; i++) part(box(0.32 - i * 0.03, 0.035, 0.2), skin, 0, 0.35 + i * 0.08, 0, upper);   // ribs
+      part(box(0.3, 0.06, 0.14), skin, 0, 0.02, 0, upper);   // hips
+    } else {
+      part(box(...look.torso), cloth, 0, 0.32, 0, upper);
+    }
+    // arms swing from the shoulders (a zombie holds them out in front)
+    const arms = [-1, 1].map((s) => {
+      const shoulder = new THREE.Group();
+      shoulder.position.set(s * (look.torso[0] / 2 + look.limb / 2 + 0.01), 0.58, 0);
+      const armLength = type === 'werewolf' ? 0.78 : 0.64;
+      part(box(look.limb * 0.8, armLength, look.limb * 0.8), skin, 0, -armLength / 2, 0, shoulder);
+      if (type === 'werewolf') {
+        for (const cx of [-0.04, 0, 0.04]) part(box(0.015, 0.1, 0.015), eyes, cx, -armLength - 0.04, 0.03, shoulder);   // claws
+      }
+      upper.add(shoulder);
+      return shoulder;
+    });
+    // the head
+    const headY = 0.8;
+    if (type === 'skeleton') {
+      const skull = new THREE.SphereGeometry(0.12, 10, 8);
+      geos.push(skull);
+      part(skull, skin, 0, headY, 0, upper);
+      part(box(0.14, 0.05, 0.1), skin, 0, headY - 0.12, 0.03, upper);   // jaw
+    } else {
+      part(box(0.24, 0.27, 0.25), skin, 0, headY, 0, upper);
+    }
+    if (type === 'werewolf') {
+      part(box(0.13, 0.11, 0.2), skin, 0, headY - 0.06, 0.2, upper);   // snout
+      const ear = new THREE.ConeGeometry(0.05, 0.16, 6);
+      geos.push(ear);
+      for (const s of [-1, 1]) part(ear, cloth, s * 0.09, headY + 0.19, -0.02, upper);
+    }
+    const eye = box(0.045, 0.03, 0.02);
+    for (const s of [-1, 1]) part(eye, eyes, s * 0.06, headY + 0.03, type === 'skeleton' ? 0.11 : 0.13, upper);
+    this.limbs = { legs, arms, upper, armsOut: type === 'zombie' };
+    this.group.traverse((o) => { if (o.isMesh) o.renderOrder = 10; });
+  }
+
+  // legs and arms swing as it walks
+  _animateFigure(dt, moving) {
+    const l = this.limbs;
+    this.walkPhase += dt * (moving ? this.speed * 5.5 * (this.bursting > 0 ? 1.8 : 1) : 0);
+    const swing = Math.sin(this.walkPhase) * (moving ? 0.55 : 0);
+    l.legs[0].rotation.x = swing;
+    l.legs[1].rotation.x = -swing;
+    if (l.armsOut) {
+      l.arms[0].rotation.x = -1.35 + Math.sin(this.walkPhase * 0.5) * 0.12;
+      l.arms[1].rotation.x = -1.35 - Math.sin(this.walkPhase * 0.5 + 1) * 0.12;
+    } else {
+      l.arms[0].rotation.x = -swing * 0.8;
+      l.arms[1].rotation.x = swing * 0.8;
+    }
+    l.upper.position.y = 0.9 + Math.abs(Math.cos(this.walkPhase)) * 0.03;
+    // a faint glow of its own color so it shows in the dark, and a red flash when hurt
+    for (const mat of this.figureMats) {
+      if (!mat.emissive) continue;
+      mat.emissive.copy(mat.color).multiplyScalar(0.22);
+      mat.emissive.r += this.hurtGlow * 0.7;
+    }
+  }
+
   // for a split second the ghost stutters into view with static: a clue where it is
   glitch() {
-    if (this.state !== 'hunting') return;
+    if (this.state !== 'hunting' || this.solid) return;
     this.glitchTime = GLITCH_TIME;
     this.audio.radioStatic(this.body);
   }
@@ -232,7 +346,7 @@ export class Ghost {
     const head = camera.getWorldPosition(_tmp);
     const fwd = camera.getWorldDirection(_to).setY(0).normalize();
     this.group.position.copy(head).addScaledVector(fwd, 0.55);
-    this.group.position.y = this.bats.length ? head.y : head.y - 1.45;
+    this.group.position.y = this.bats.length ? head.y : head.y - (this.solid ? 1.65 : 1.45);
     this.group.lookAt(head.x, this.group.position.y, head.z);
     this.group.scale.setScalar(this.baseScale);
   }
@@ -257,6 +371,18 @@ export class Ghost {
   }
 
   _hunt(dt, player, barrier, look) {
+    // a zombie still climbing out of its grave: it rises out of the ground first
+    if (this.rise > 0) {
+      this.rise -= dt;
+      const k = Math.max(0, this.rise / RISE_TIME);
+      this.group.position.set(this.pos.x, -1.8 * k, this.pos.z);
+      this.group.lookAt(player.x, this.group.position.y, player.z);
+      this._setOpacity(1);
+      this._animateFigure(dt, false);
+      this.limbs.arms[0].rotation.x = this.limbs.arms[1].rotation.x = -2.6 + (1 - k) * 1.2;   // clawing upward
+      this._syncAudio();
+      return this.rise <= 0 ? null : (Math.random() < dt * 4 ? { type: 'step', kind: 'ripple', at: this.pos.clone().setY(0), dist: 9, dir: new THREE.Vector3() } : null);
+    }
     // walkers stay on the floor; flyers and crawlers go for your chest
     if (this.onFloor) _target.set(player.x, BODY_Y, player.z);
     else _target.set(player.x, THREE.MathUtils.clamp(player.y - 0.45, 0.8, 1.8), player.z);
@@ -346,6 +472,13 @@ export class Ghost {
         this.audio.whisper(this.body);
       }
     }
+    if (this.type === 'zombie') {
+      this.whisperTimer -= dt;
+      if (this.whisperTimer <= 0) {
+        this.whisperTimer = 2.5 + Math.random() * 2;
+        this.audio.zombieGroan(this.body, this.pitch);
+      }
+    }
     if (this.type === 'werewolf' && dist < 4) {
       this.screechTimer -= dt;
       if (this.screechTimer <= 0) {
@@ -378,6 +511,7 @@ export class Ghost {
       glitch = Math.random() < 0.65 ? 0.35 + Math.random() * 0.55 : 0;  // flickering on and off
     }
     this._setOpacity(Math.max(this.hurtGlow, this.revealed ? 0.7 : 0, shimmer, glitch));
+    if (this.solid) this._animateFigure(dt, !this.frozen);
     const lift = this.bats.length ? 0 : BODY_Y;   // the bat swarm is centered on its position
     this.group.position.set(this.pos.x, this.pos.y - lift + Math.sin(this.time * 2) * 0.04, this.pos.z);
     this.group.lookAt(player.x, this.group.position.y, player.z);
@@ -409,6 +543,7 @@ export class Ghost {
       if (demon) this.audio.stomp(this.feet, this.pitch);
       else if (this.type === 'shadow') this.audio.softStep(this.feet, this.pitch);
       else if (this.type === 'werewolf') this.audio.pawStep(this.feet);
+      else if (this.type === 'zombie') this.audio.dragStep(this.feet, this.pitch);
       else this.audio.footstep(this.feet, this.pitch);
       if (this.type === 'skeleton' && Math.random() < 0.6) this.audio.boneRattle(this.body);
       if (this.type === 'werewolf' && this.bursting > 0) this.soundTimer = Math.min(this.soundTimer, 0.16);   // galloping
@@ -455,6 +590,13 @@ export class Ghost {
   }
 
   _setOpacity(o) {
+    if (this.solid) {
+      // a body is always there to see while it hunts; it only fades when banished
+      const k = this.state === 'hunting' || this.state === 'scare' ? 1 : o;
+      for (const mat of this.figureMats) mat.opacity = k;
+      this.group.visible = k > 0.001;
+      return;
+    }
     this.bodyMat.opacity = o * 0.75;
     // the demon's and shadow's eyes burn brighter than their faint bodies
     this.eyeMat.opacity = ['demon', 'shadow', 'werewolf', 'wraith'].includes(this.type) ? Math.min(1, o * 3) : o;
@@ -472,6 +614,8 @@ export class Ghost {
     this.scene.remove(this.group);
     this.bodyMat.dispose();
     this.eyeMat.dispose();
+    for (const mat of this.figureMats || []) mat.dispose();
+    for (const geo of this.figureGeos || []) geo.dispose();
     this.audio.releaseVoice(this.feet);
     this.audio.releaseVoice(this.body);
   }

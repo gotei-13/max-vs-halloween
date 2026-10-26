@@ -714,6 +714,7 @@ export function createYard() {
       exitPoint: { x: 0, y: 1.2, z: Z0 },
       bossFrom: { x: 0, z: Z0 },   // the guardian comes in through the gate
       noKey: true,
+      graves: graves.map(([x, z]) => ({ x, z: z + 0.7 })),   // zombies climb out just in front of these
     },
   });
 }

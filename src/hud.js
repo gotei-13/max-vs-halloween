@@ -236,7 +236,9 @@ export class Hud {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    for (let i = 0; i < maxLives; i++) drawPumpkin(ctx, 45 + i * 78, 60, 30, i < lives);
+    // up to 6 pumpkins: smaller and closer together when there are more than 3
+    const step = maxLives > 3 ? 230 / maxLives : 78, size = maxLives > 3 ? Math.min(24, step * 0.45) : 30;
+    for (let i = 0; i < maxLives; i++) drawPumpkin(ctx, 35 + size * 0.3 + i * step, 60, size, i < lives);
     // stamina bar under the pumpkins
     if (stamina < 0.995) {
       ctx.fillStyle = 'rgba(255,255,255,0.15)';
