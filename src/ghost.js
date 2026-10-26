@@ -78,7 +78,7 @@ export class Ghost {
     this.glitchTime = 0;      // > 0 while the ghost glitches into view
     this.glitchTimer = -2;    // seconds until the next glitch (set by the game on its first frame)
     this.catchRadius = ['demon', 'bats', 'werewolf', 'zombie'].includes(type) ? 0.8 : CATCH_RADIUS;
-    this.baseScale = { demon: 1.2, shadow: 1.1, werewolf: 1.15, skeleton: 0.95 }[type] || 1;
+    this.baseScale = { demon: hp > 3 ? 1.6 : 1.2, shadow: 1.1, werewolf: 1.15, skeleton: 0.95 }[type] || 1;
     this.burstTimer = 3 + Math.random() * 2;   // werewolf: seconds until the next sprint
     this.bursting = 0;                         // werewolf: seconds of sprint left
     this.blinkTimer = 3 + Math.random() * 1.5; // wraith: seconds until it blinks closer

@@ -42,7 +42,8 @@ const DIFFICULTIES = {
 };
 // The haunted house, one area after another, each harder than the last. In each
 // area banish `goal` creatures (first the ones in `plan`, then any of `types`),
-// up to `together` at once, moving `speed` times faster. Then a key appears and,
+// up to `together` at once, moving `speed` times faster. `life`: an extra life appears
+// halfway through (only in some areas). Then a key appears and,
 // when you grab it, `chase` creatures come after you: RUN to the door! In the
 // yard the guardian comes instead, and after it a horde chases you to the gate.
 const AREAS = [
@@ -52,24 +53,24 @@ const AREAS = [
     intro: 'Escape the haunted house! Banish 5 ghosts to find the key',
   },
   {
-    build: createHallway, label: 'Hallway', title: 'THE HALLWAY', goal: 6, together: 2, speed: 1.1, chase: 2, chaser: 'walker',
-    plan: ['shadow', 'walker', 'shadow', 'flyer', 'shadow', 'shadow'], types: ['shadow', 'walker', 'flyer'],
+    build: createHallway, label: 'Hallway', title: 'THE HALLWAY', goal: 6, together: 2, speed: 1.1, chase: 2, chaser: 'walker', life: true,
+    plan: ['shadow', 'walker', 'shadow', 'demon', 'flyer', 'shadow'], types: ['shadow', 'walker', 'flyer'],
     intro: 'Banish 6. Shadow people only move when you are NOT looking at them!',
   },
   {
     build: createStairwell, label: 'Stairs', title: 'THE STAIRCASE', goal: 7, together: 2, speed: 1.2, chase: 2, chaser: 'wraith',
-    plan: ['bats', 'bats', 'wraith', 'bats', 'flyer', 'wraith', 'bats'], types: ['bats', 'wraith', 'flyer', 'crawler'],
+    plan: ['bats', 'bats', 'wraith', 'bats', 'demon', 'wraith', 'bats'], types: ['bats', 'wraith', 'flyer', 'crawler'],
     intro: 'Chase away 7 creatures. Beware the wraiths: they blink closer!',
   },
   {
-    build: createFoyer, label: 'Front hall', title: 'THE ENTRANCE HALL', goal: 8, together: 2, speed: 1.3, chase: 3, chaser: 'skeleton',
-    plan: ['skeleton', 'walker', 'wraith', 'skeleton', 'shadow', 'skeleton', 'crawler', 'wraith'],
+    build: createFoyer, label: 'Front hall', title: 'THE ENTRANCE HALL', goal: 8, together: 2, speed: 1.3, chase: 3, chaser: 'skeleton', life: true,
+    plan: ['skeleton', 'walker', 'demon', 'skeleton', 'shadow', 'skeleton', 'demon', 'wraith'],
     types: ['skeleton', 'wraith', 'shadow', 'walker', 'flyer', 'crawler'],
     intro: 'Banish 8. Skeletons need 2 hits! The front door key is here somewhere',
   },
   {
     build: createYard, label: 'Yard', title: 'THE GRAVEYARD', goal: 10, together: 3, speed: 1.4, chase: 0, chaser: 'werewolf',
-    plan: ['zombie', 'zombie', 'werewolf', 'zombie', 'skeleton', 'bats', 'zombie', 'werewolf', 'wraith', 'werewolf'],
+    plan: ['zombie', 'zombie', 'werewolf', 'demon', 'zombie', 'skeleton', 'zombie', 'werewolf', 'demon', 'werewolf'],
     types: ['zombie', 'zombie', 'werewolf', 'skeleton', 'wraith', 'bats'],
     boss: { hp: 6 }, horde: ['werewolf', 'zombie'],
     intro: 'Almost out! The dead are rising. Banish 10… then the guardian of the gate comes',
@@ -171,7 +172,7 @@ const exitMarker = (() => {
 const GHOST_INTROS = {
   flyer: 'Something is flying above you… look up!',
   crawler: 'Something is knocking under the floor… look down!',
-  demon: 'THE GUARDIAN! A red demon: 6 hits to banish it, it takes 2 lives! Use the fire crystal!',
+  demon: 'A RED DEMON! 3 hits to banish it, and it takes 2 lives if it catches you!',
   shadow: 'A shadow person! It only moves when you are NOT looking. Turn to its soft steps to freeze it',
   bats: 'Bats! Listen for the fluttering wings above and below you',
   wraith: 'A WRAITH! Listen for its chains. It blinks closer, so be quick!',
@@ -526,6 +527,7 @@ function spawnBoss() {
   const from = room.info.bossFrom;
   const angle = Math.atan2(from.x - player.x, -(from.z - player.z));
   spawnGhost('demon', { angle, hp: AREAS[areaIndex].boss.hp, boss: true });
+  hud.toast(`THE GUARDIAN: a giant red demon! ${AREAS[areaIndex].boss.hp} hits to banish it. Use the fire crystal!`, 3.5);
 }
 
 function showReady() {
@@ -745,7 +747,7 @@ function onHit(ghost, controller, damage = 1) {
   goalDone++;
   const need = AREAS[areaIndex].goal;
   if (goalDone >= need) onGoalReached();
-  else if (!lifeShown && goalDone >= Math.ceil(need / 2)) {
+  else if (AREAS[areaIndex].life && !lifeShown && goalDone >= Math.ceil(need / 2)) {
     lifeShown = true;
     const spot = freeSpot();
     lifePumpkin.show(spot.x, spot.z);
