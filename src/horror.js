@@ -105,6 +105,7 @@ export class Horror {
     this.room = room;
     this.bounds = room.info.bounds;
     this.door = room.info.horrorDoor ? new THREE.Vector3().copy(room.info.horrorDoor) : null;
+    this.outdoor = Boolean(room.info.outdoor);   // no walls for bloody writing outside
     this.reset();
   }
 
@@ -125,7 +126,7 @@ export class Horror {
       this.timer -= dt * this.intensity;
       if (this.timer <= 0) {
         this.timer = 20 + Math.random() * 15;
-        const events = EVENTS.filter((name) => name !== 'door' || (this.door && this.allowDoor));
+        const events = EVENTS.filter((name) => (name !== 'door' || (this.door && this.allowDoor)) && (name !== 'writing' || !this.outdoor));
         this.event = { type: events[Math.floor(Math.random() * events.length)], t: 0, started: false };
       }
     }

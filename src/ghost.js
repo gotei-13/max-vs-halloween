@@ -11,6 +11,9 @@ import * as THREE from '../vendor/three.module.js';
 //   shadow  - a dark figure with red eyes and very soft steps; it only moves while
 //             you are NOT looking at it, so turning toward its steps freezes it
 //   bats    - a fluttering, squeaking swarm from above or below
+//   wraith  - a dark flying spirit with rattling chains that blinks closer every few seconds
+//   skeleton- rattling bones on the floor, 2 hits
+//   werewolf- howls when it arrives, then sprints at you in bursts, 2 hits
 
 export const GHOST_TYPES = ['walker', 'flyer', 'crawler'];
 
@@ -60,14 +63,17 @@ export class Ghost {
     this.pitch = pitch;
     this.state = 'hunting';  // hunting -> dying | scare -> gone
     this.doomed = false;     // a spell is on its way to it
-    this.onFloor = type === 'walker' || type === 'demon' || type === 'shadow';
+    this.onFloor = ['walker', 'demon', 'shadow', 'skeleton', 'werewolf'].includes(type);
     this.damage = type === 'demon' ? 2 : 1;
-    this.hp = hp ?? (type === 'demon' ? 3 : 1);   // spell hits needed to banish it
+    this.hp = hp ?? ({ demon: 3, skeleton: 2, werewolf: 2 }[type] || 1);   // spell hits needed to banish it
     this.hurtGlow = 0;
     this.glitchTime = 0;      // > 0 while the ghost glitches into view
     this.glitchTimer = -2;    // seconds until the next glitch (set by the game on its first frame)
-    this.catchRadius = type === 'demon' || type === 'bats' ? 0.8 : CATCH_RADIUS;
-    this.baseScale = type === 'demon' ? 1.2 : type === 'shadow' ? 1.1 : 1;
+    this.catchRadius = ['demon', 'bats', 'werewolf'].includes(type) ? 0.8 : CATCH_RADIUS;
+    this.baseScale = { demon: 1.2, shadow: 1.1, werewolf: 1.15, skeleton: 0.95 }[type] || 1;
+    this.burstTimer = 3 + Math.random() * 2;   // werewolf: seconds until the next sprint
+    this.bursting = 0;                         // werewolf: seconds of sprint left
+    this.blinkTimer = 3 + Math.random() * 1.5; // wraith: seconds until it blinks closer
     this.frozen = false;      // a shadow that is being looked at
     if (this.onFloor) {
       this.pos = new THREE.Vector3(head.x + Math.sin(angle) * WALK_RADIUS, BODY_Y, head.z - Math.cos(angle) * WALK_RADIUS);
@@ -93,12 +99,12 @@ export class Ghost {
     const g = geometry();
     // drawn on top of walls/floor so a ghost is seen even when it is still behind them
     const demon = type === 'demon';
-    const color = { demon: 0xd01810, shadow: 0x0c0612, bats: 0x1e1626 }[type] ?? 0xb8fff0;
+    const color = { demon: 0xd01810, shadow: 0x0c0612, bats: 0x1e1626, wraith: 0x5a2a8a, skeleton: 0xe8dcc0, werewolf: 0x5a4a40 }[type] ?? 0xb8fff0;
     this.bodyMat = new THREE.MeshBasicMaterial({
       color, transparent: true, opacity: 0, depthWrite: false, depthTest: false, side: type === 'bats' ? THREE.DoubleSide : THREE.FrontSide,
     });
     // the demon's and shadow's eyes burn; a ghost's eyes are dark holes
-    const eyeColor = { demon: 0xffd040, shadow: 0xff2a10 }[type] ?? 0x000000;
+    const eyeColor = { demon: 0xffd040, shadow: 0xff2a10, wraith: 0x9fffe6, werewolf: 0xffc020, skeleton: 0x200000 }[type] ?? 0x000000;
     this.eyeMat = new THREE.MeshBasicMaterial({ color: eyeColor, transparent: true, opacity: 0, depthTest: false });
     this.group = new THREE.Group();
     this.bats = [];
@@ -121,12 +127,14 @@ export class Ghost {
       body.renderOrder = 10;
       this.group.add(body);
     }
-    if (demon) {
+    if (demon || type === 'werewolf') {
+      // horns for the demon, pointed ears for the werewolf
       for (const s of [-1, 1]) {
         const horn = new THREE.Mesh(g.horn, this.bodyMat);
         horn.renderOrder = 10;
-        horn.position.set(s * 0.17, 1.74, 0.04);
-        horn.rotation.z = -s * 0.45;
+        horn.position.set(s * (demon ? 0.17 : 0.2), demon ? 1.74 : 1.72, 0.04);
+        horn.rotation.z = -s * (demon ? 0.45 : 0.25);
+        if (!demon) horn.scale.set(1.3, 0.8, 0.6);
         this.group.add(horn);
       }
     }
@@ -146,6 +154,8 @@ export class Ghost {
     this.body = audio.createVoice();
     _side.set(1, 0, 0);
     this._syncAudio();
+    if (type === 'werewolf') audio.howl(this.body);   // you hear it coming from far away
+    if (type === 'wraith') audio.chains(this.body);
   }
 
   get alive() {
@@ -188,14 +198,18 @@ export class Ghost {
     return null;
   }
 
-  // hit but not banished yet (the demon): it flashes into view, roars and is thrown back
-  hurt(player) {
-    this.hp--;
+  // hit but not banished yet (demon, skeleton, werewolf): it flashes into view,
+  // cries out and is thrown back. damage: 2 with the fire wand
+  hurt(player, damage = 1) {
+    this.hp -= damage;
     this.doomed = false;
     this.hurtGlow = 1;
+    this.bursting = 0;
     _to.set(this.pos.x - player.x, 0, this.pos.z - player.z).normalize();
     this.pos.addScaledVector(_to, 1.8);
-    this.audio.roar(this.body);
+    if (this.type === 'skeleton') this.audio.boneRattle(this.body);
+    else if (this.type === 'werewolf') this.audio.yelp(this.body);
+    else this.audio.roar(this.body);
   }
 
   // for a split second the ghost stutters into view with static: a clue where it is
@@ -266,8 +280,30 @@ export class Ghost {
     _side.normalize();
     // sway side to side a bit, less when close, so the sound source moves
     const sway = Math.sin(this.time * 0.9) * this.wobble * Math.min(1, dist / 3);
-    const step = this.frozen ? 0 : this.speed * dt;
+    // a werewolf sprints at you in bursts
+    if (this.type === 'werewolf') {
+      if (this.bursting > 0) this.bursting -= dt;
+      else {
+        this.burstTimer -= dt;
+        if (this.burstTimer <= 0 && dist > 1.5) {
+          this.bursting = 1.3;
+          this.burstTimer = 3.5 + Math.random() * 2;
+          this.audio.growl(this.body, 1.2);
+        }
+      }
+    }
+    const step = this.frozen ? 0 : this.speed * dt * (this.bursting > 0 ? 2.8 : 1);
     this.pos.addScaledVector(_to, step).addScaledVector(_side, sway * step);
+    // a wraith blinks a good bit closer now and then, with a flicker and its chains
+    if (this.type === 'wraith') {
+      this.blinkTimer -= dt;
+      if (this.blinkTimer <= 0 && dist > 2.5) {
+        this.blinkTimer = 3.5 + Math.random() * 2;
+        this.pos.addScaledVector(_to, Math.min(2.2, dist - 1.8));
+        this.glitchTime = 0.3;
+        this.audio.chains(this.body);
+      }
+    }
     if (this.onFloor) this.pos.y = BODY_Y;
 
     // held back by the dome: slide along its edge; justBlocked tells the game to spark
@@ -310,6 +346,13 @@ export class Ghost {
         this.audio.whisper(this.body);
       }
     }
+    if (this.type === 'werewolf' && dist < 4) {
+      this.screechTimer -= dt;
+      if (this.screechTimer <= 0) {
+        this.screechTimer = 1.6;
+        this.audio.pant(this.body);
+      }
+    }
     if (this.type === 'bats') {
       this.screechTimer -= dt;
       if (this.screechTimer <= 0) {
@@ -326,7 +369,7 @@ export class Ghost {
     }
 
     // a faint shimmer only when it is almost on top of you (the demon glows red from further away)
-    const seen = this.type === 'demon' ? 3.2 : 1.8;
+    const seen = this.type === 'demon' ? 3.2 : this.type === 'skeleton' ? 2.4 : 1.8;
     this.hurtGlow = Math.max(0, this.hurtGlow - dt * 1.5);
     const shimmer = dist < seen ? (1 - dist / seen) * (this.type === 'demon' ? 0.3 : 0.18) : 0;
     let glitch = 0;
@@ -365,7 +408,10 @@ export class Ghost {
       this._syncAudio();
       if (demon) this.audio.stomp(this.feet, this.pitch);
       else if (this.type === 'shadow') this.audio.softStep(this.feet, this.pitch);
+      else if (this.type === 'werewolf') this.audio.pawStep(this.feet);
       else this.audio.footstep(this.feet, this.pitch);
+      if (this.type === 'skeleton' && Math.random() < 0.6) this.audio.boneRattle(this.body);
+      if (this.type === 'werewolf' && this.bursting > 0) this.soundTimer = Math.min(this.soundTimer, 0.16);   // galloping
       event.kind = 'foot';
       if (demon) event.color = 0xff3020;
       event.at = this.pos.clone().addScaledVector(_side, 0.12 * this.stepSide).setY(0);
@@ -375,9 +421,9 @@ export class Ghost {
       event.kind = 'wisp';
       event.at = this.pos.clone();
       if (Math.random() < 0.7) return null;   // fluttering is constant; leave a trace only now and then
-    } else if (this.type === 'flyer') {
+    } else if (this.type === 'flyer' || this.type === 'wraith') {
       this.soundTimer += THREE.MathUtils.clamp(0.5 / this.speed, 0.45, 0.9);
-      this.audio.whoosh(this.body, this.pitch);
+      this.audio.whoosh(this.body, this.pitch * (this.type === 'wraith' ? 0.7 : 1));
       event.kind = 'wisp';
       event.at = this.pos.clone();
     } else {
@@ -411,7 +457,7 @@ export class Ghost {
   _setOpacity(o) {
     this.bodyMat.opacity = o * 0.75;
     // the demon's and shadow's eyes burn brighter than their faint bodies
-    this.eyeMat.opacity = this.type === 'demon' || this.type === 'shadow' ? Math.min(1, o * 3) : o;
+    this.eyeMat.opacity = ['demon', 'shadow', 'werewolf', 'wraith'].includes(this.type) ? Math.min(1, o * 3) : o;
     this.group.visible = o > 0.001;
   }
 

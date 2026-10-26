@@ -27,6 +27,8 @@ export class SpookyAudio {
     this.head = null;
     this.dread = null;
     this.music = null;
+    this.musicTension = 0;   // 0 calm .. 1 frantic: the music speeds up deeper in the house
+    this.heartTimer = 0;
   }
 
   init() {
@@ -185,6 +187,72 @@ export class SpookyAudio {
     for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
       const f = 1500 + Math.random() * 500;
       this._vocal(voice, t + i * 0.09, 0.07, f, f * 1.15, 'i', 0.25, { attack: 0.005 });
+    }
+  }
+
+  // a skeleton: dry bones clattering (short hollow wooden clicks)
+  boneRattle(voice) {
+    const t = this.ctx.currentTime;
+    const clicks = 4 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < clicks; i++) {
+      const t0 = t + i * (0.03 + Math.random() * 0.04);
+      const n = this._noiseSource(t0, 0.03);
+      const bp = this._filter('bandpass', 1800 + Math.random() * 1600, 9);
+      const g = this._envelope(t0, 0.001, 0.025, 1.3 + Math.random());
+      n.connect(bp).connect(g).connect(voice);
+    }
+  }
+
+  // a werewolf: a long howl rising and falling
+  howl(voice) {
+    const t = this.ctx.currentTime;
+    this._vocal(voice, t, 2.6, 320, 260, 'u', 0.6, { vibrato: 5, depth: 10, attack: 0.5, peakAt: 0.9, peakFreq: 560 });
+  }
+
+  // a werewolf's paws: quick heavy thuds with claws on the floor
+  pawStep(voice) {
+    const t = this.ctx.currentTime;
+    this._thud(voice, t, 150, 1.8, 0.14);
+    const n = this._noiseSource(t + 0.02, 0.05);
+    const hp = this._filter('highpass', 3000);
+    const g = this._envelope(t + 0.02, 0.002, 0.04, 0.5);
+    n.connect(hp).connect(g).connect(voice);
+  }
+
+  // a werewolf panting
+  pant(voice) {
+    const t = this.ctx.currentTime;
+    for (const dt of [0, 0.22]) {
+      const n = this._noiseSource(t + dt, 0.18);
+      const bp = this._filter('bandpass', 700, 1.2);
+      const g = this._envelope(t + dt, 0.03, 0.17, 0.7);
+      n.connect(bp).connect(g).connect(voice);
+    }
+  }
+
+  // a werewolf is hit: a sharp yelp and a snarl
+  yelp(voice) {
+    const t = this.ctx.currentTime;
+    this._vocal(voice, t, 0.35, 900, 600, 'i', 0.6, { attack: 0.01 });
+    this.growl(voice, 1.4);
+  }
+
+  // a wraith: rattling chains
+  chains(voice) {
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 9; i++) {
+      const t0 = t + i * 0.05 + Math.random() * 0.03;
+      const o = this.ctx.createOscillator();
+      o.type = 'triangle';
+      o.frequency.value = 2400 + Math.random() * 1800;
+      const g = this._envelope(t0, 0.001, 0.08, 0.12);
+      o.connect(g).connect(voice);
+      o.start(t0);
+      o.stop(t0 + 0.1);
+      const n = this._noiseSource(t0, 0.03);
+      const hp = this._filter('highpass', 4000);
+      const ng = this._envelope(t0, 0.001, 0.025, 0.5);
+      n.connect(hp).connect(ng).connect(voice);
     }
   }
 
@@ -439,6 +507,103 @@ export class SpookyAudio {
       n.connect(bp).connect(g).connect(voice);
       t0 += len;
     }
+  }
+
+  // ---- the fire crystal ------------------------------------------------------
+
+  // a crystal appears: a deep whoomph of flame
+  crystalAppear(voice) {
+    const t = this.ctx.currentTime;
+    const n = this._noiseSource(t, 1);
+    const lp = this._filter('lowpass', 300);
+    lp.frequency.exponentialRampToValueAtTime(2000, t + 0.4);
+    const g = this._envelope(t, 0.1, 0.9, 1);
+    n.connect(lp).connect(g).connect(voice);
+  }
+
+  // the waiting crystal crackles like a campfire
+  crackle(voice) {
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const t0 = t + Math.random() * 0.3;
+      const n = this._noiseSource(t0, 0.02);
+      const hp = this._filter('highpass', 1500 + Math.random() * 3000);
+      const g = this._envelope(t0, 0.001, 0.015 + Math.random() * 0.02, 0.8 + Math.random() * 0.8);
+      n.connect(hp).connect(g).connect(voice);
+    }
+    const roar = this._noiseSource(t, 0.4);
+    const lp = this._filter('lowpass', 400);
+    const rg = this._envelope(t, 0.1, 0.4, 0.25);
+    roar.connect(lp).connect(rg).connect(voice);
+  }
+
+  // picking up the crystal: the wand bursts into flame
+  firePickup() {
+    const t = this.ctx.currentTime;
+    const n = this._noiseSource(t, 1.4);
+    const bp = this._filter('bandpass', 200, 0.6);
+    bp.frequency.exponentialRampToValueAtTime(2500, t + 0.5);
+    bp.frequency.exponentialRampToValueAtTime(600, t + 1.3);
+    const g = this._envelope(t, 0.05, 1.3, 1.4);
+    n.connect(bp).connect(g).connect(this.master);
+    this._thud(this.master, t, 120, 2.5, 0.5);
+    this._bell(this.master, 330, t + 0.2, 0.15, 2);
+  }
+
+  // casting a fireball: a short roar of flame
+  fireCast() {
+    const t = this.ctx.currentTime;
+    const n = this._noiseSource(t, 0.5);
+    const bp = this._filter('bandpass', 300, 0.7);
+    bp.frequency.exponentialRampToValueAtTime(1400, t + 0.12);
+    bp.frequency.exponentialRampToValueAtTime(300, t + 0.45);
+    const g = this._envelope(t, 0.01, 0.45, 1.1);
+    n.connect(bp).connect(g).connect(this.master);
+    this._thud(this.master, t, 140, 1.2, 0.2);
+  }
+
+  // the fire runs out: a hiss, like water on embers
+  fireEnd() {
+    const t = this.ctx.currentTime;
+    const n = this._noiseSource(t, 1.2);
+    const hp = this._filter('highpass', 3000);
+    hp.frequency.exponentialRampToValueAtTime(800, t + 1.1);
+    const g = this._envelope(t, 0.02, 1.1, 0.5);
+    n.connect(hp).connect(g).connect(this.master);
+  }
+
+  // ---- adrenaline -------------------------------------------------------------
+
+  // level 0..1: how close the danger is. Plays a heartbeat that gets louder and
+  // faster; returns true on each beat (for a controller pulse). Call every frame.
+  updateHeart(dt, level) {
+    if (!this.ctx || this.dread || level < 0.05) {
+      this.heartTimer = Math.min(this.heartTimer, 0.3);
+      return false;
+    }
+    this.heartTimer -= dt;
+    if (this.heartTimer > 0) return false;
+    this.heartTimer = 1.0 - 0.55 * level;
+    this._heartbeat(0.45 + 0.8 * level);
+    return true;
+  }
+
+  // the player out of breath after running
+  playerPant() {
+    const t = this.ctx.currentTime;
+    for (const [dt, f] of [[0, 900], [0.35, 600], [0.7, 900], [1.05, 600]]) {
+      const n = this._noiseSource(t + dt, 0.3);
+      const bp = this._filter('bandpass', f, 1);
+      const g = this._envelope(t + dt, 0.05, 0.28, 0.35);
+      n.connect(bp).connect(g).connect(this.master);
+    }
+  }
+
+  // entering a new part of the house: a deep bell and a drum hit
+  areaStinger() {
+    const t = this.ctx.currentTime;
+    this._bell(this.master, 98, t, 0.35, 4);
+    this._thud(this.master, t, 80, 3, 0.9);
   }
 
   // ---- keys, doors and escaping ---------------------------------------------
@@ -760,8 +925,10 @@ export class SpookyAudio {
         this._musicBox(m.out, 440 * Math.pow(2, (note - 69) / 12) * detune, m.next);
       }
       // the tune drags a little, as if the box is winding down
-      m.next += beats * 0.42 * (0.96 + Math.random() * 0.12);
+      m.next += beats * 0.42 * (1 - 0.35 * this.musicTension) * (0.96 + Math.random() * 0.12);
       m.index++;
+      // deeper in the house a slow drum joins in, like a heart under the floor
+      if (this.musicTension > 0.3 && m.index % 4 === 0) this._thud(m.out, m.next, 90, 2.2 * this.musicTension, 0.3);
     }
     while (m.padNext < t + 0.5) {
       const chord = PAD_CHORDS[m.pad % PAD_CHORDS.length];

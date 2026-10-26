@@ -262,7 +262,7 @@ export class VrMenu {
     ctx.font = '26px system-ui, sans-serif';
     ctx.fillStyle = '#8a82a8';
     ctx.fillText('Point your wand at a button and pull the trigger', W / 2, 866);
-    ctx.fillText('In the game: left stick walks · right stick turns', W / 2, 900);
+    ctx.fillText('In the game: left stick walks · hold grip to run · right stick turns', W / 2, 900);
     this.texture.needsUpdate = true;
   }
 }

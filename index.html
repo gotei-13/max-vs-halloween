@@ -117,8 +117,8 @@
   .seg { display: grid; gap: 10px; }
   .seg.three { grid-template-columns: repeat(3, 1fr); }
   .seg.two { grid-template-columns: repeat(2, 1fr); }
-  .seg.four { grid-template-columns: repeat(4, 1fr); }
-  .seg.four button { padding: 10px 4px; font-size: 14px; }
+  .seg.five { grid-template-columns: repeat(5, 1fr); }
+  .seg.five button { padding: 10px 2px; font-size: 13px; }
   .seg button[disabled] { opacity: .45; cursor: default; transform: none; }
   .seg button {
     display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 8px;
@@ -292,7 +292,7 @@
 
       <section>
         <h2><span class="step">3</span>Start at</h2>
-        <div id="areas" class="seg four"></div>
+        <div id="areas" class="seg five"></div>
       </section>
 
       <section>
@@ -316,11 +316,11 @@
           <tr><td><svg class="ico"><use href="#i-demon"/></svg> <b>Red demon</b></td><td>3 hits to banish, takes 2 lives</td></tr>
         </table>
         <p>Hit a ghost with a spell before it reaches you. You have 3 pumpkins (lives).</p>
-        <p><b>Laptop:</b> W A S D to walk · mouse to look · click or Space to cast · R to switch room · Esc to pause<br>
-          <b>VR:</b> left stick to walk · right stick to turn · point the wand and pull the trigger</p>
+        <p><b>Laptop:</b> W A S D to walk · Shift to run · mouse to look · click or Space to cast · R to switch room · Esc to pause<br>
+          <b>VR:</b> left stick to walk · hold grip to run · right stick to turn · point the wand and pull the trigger</p>
       </details>
 
-      <footer><span><svg class="ico"><use href="#i-headphones"/></svg> Headphones make it work</span><span>Version 16 · Oct 25</span></footer>
+      <footer><span><svg class="ico"><use href="#i-headphones"/></svg> Headphones make it work</span><span>Version 17 · Oct 26</span></footer>
     </div>
   </div>
   <script type="module" src="src/main.js"></script>

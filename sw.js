@@ -3,14 +3,14 @@
 // off. It fetches the newest files first (so updates arrive) and falls back
 // to the saved copy.
 
-const CACHE = 'maxiween-v17';
+const CACHE = 'maxiween-v18';
 const FILES = [
   './', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
   './vendor/three.module.js',
   './src/main.js', './src/audio.js', './src/room.js', './src/textures.js', './src/ghost.js', './src/hud.js',
   './src/trail.js', './src/fx.js', './src/vrmenu.js', './src/shield.js', './src/movement.js', './src/scares.js',
-  './src/horror.js', './src/potion.js', './src/wand.js', './src/house.js', './src/key.js',
+  './src/horror.js', './src/potion.js', './src/wand.js', './src/house.js', './src/key.js', './src/powerup.js',
 ];
 
 self.addEventListener('install', (event) => {

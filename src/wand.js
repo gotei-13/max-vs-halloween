@@ -72,6 +72,11 @@ export function makeWand({ onTop = false } = {}) {
     });
   }
 
+  // the fire wand: the crystal burns orange
+  wand.userData.setFire = (on) => {
+    crystalMat.color.set(on ? 0xffb050 : 0xc7a8ff);
+    glowMat.color.set(on ? 0xff6a10 : 0x9a6cff);
+  };
   wand.userData.tip = crystal;
   wand.userData.tipZ = tipZ;
   wand.userData.power = 1;

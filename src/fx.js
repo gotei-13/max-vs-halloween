@@ -103,6 +103,9 @@ const PINK = new THREE.Color(0xff7ad9);
 const HIT_COLORS = [WHITE, VIOLET, CYAN, PINK];
 const DEMON_COLORS = [new THREE.Color(0xff3010), new THREE.Color(0xff8a20), new THREE.Color(0xffd060), WHITE];
 const SMOKE = new THREE.Color(0x5a4a7a);
+// the fire wand's fireballs
+const FIRE = [new THREE.Color(0xffe080), new THREE.Color(0xff9a20), new THREE.Color(0xff4a10)];
+const FIRE_SMOKE = new THREE.Color(0x4a3020);
 const _v = new THREE.Vector3();
 const _p = new THREE.Vector3();
 const _u = new THREE.Vector3();
@@ -127,6 +130,8 @@ export class SpellFx {
     this.coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false });
     this.haloGeo = new THREE.SphereGeometry(0.12, 12, 8);
     this.haloMat = new THREE.MeshBasicMaterial({ color: 0x8a6cff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false });
+    this.fireCoreMat = new THREE.MeshBasicMaterial({ color: 0xfff0b0, depthTest: false });
+    this.fireHaloMat = new THREE.MeshBasicMaterial({ color: 0xff6a10, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false });
     // always in the scene (changing the number of lights would stall the
     // Quest while shaders recompile); dark when no spell is around
     this.light = new THREE.PointLight(0xb090ff, 0, 7, 2);
@@ -136,12 +141,15 @@ export class SpellFx {
     this.time = 0;
   }
 
-  makeOrb() {
-    const orb = new THREE.Mesh(this.coreGeo, this.coreMat);
-    const halo = new THREE.Mesh(this.haloGeo, this.haloMat);
+  // fire: a fireball from the fire wand instead of a magic orb
+  makeOrb(fire = false) {
+    const orb = new THREE.Mesh(this.coreGeo, fire ? this.fireCoreMat : this.coreMat);
+    const halo = new THREE.Mesh(this.haloGeo, fire ? this.fireHaloMat : this.haloMat);
     orb.add(halo);
     orb.renderOrder = halo.renderOrder = 10;
     orb.userData.halo = halo;
+    orb.userData.fire = fire;
+    if (fire) orb.scale.setScalar(1.5);
     this.scene.add(orb);
     return orb;
   }
@@ -150,20 +158,26 @@ export class SpellFx {
     this.scene.remove(orb);
   }
 
-  // sparks bursting out of the wand
-  cast(origin, dir) {
+  // sparks bursting out of the wand (flames with the fire wand)
+  cast(origin, dir, fire = false) {
     for (let i = 0; i < 30; i++) {
       _v.copy(dir).addScaledVector(randomDir(_u), 0.55).normalize().multiplyScalar(1.5 + Math.random() * 3);
-      _c.copy(WHITE).lerp(VIOLET, Math.random());
+      if (fire) _c.copy(FIRE[i % 3]);
+      else _c.copy(WHITE).lerp(VIOLET, Math.random());
       this.sparks.spawn(origin, _v, _c, 0.25 + Math.random() * 0.3, 0, 3);
     }
-    this.glows.spawn(origin, _v.set(0, 0, 0), VIOLET, 0.25);
+    this.glows.spawn(origin, _v.set(0, 0, 0), fire ? FIRE[1] : VIOLET, 0.25);
+    this.light.color.set(fire ? 0xff7a20 : 0xb090ff);
     this.light.position.copy(origin);
     this.flashGlow = Math.max(this.flashGlow, 3);
   }
 
   // called every frame for each flying orb: comet tail + two spiralling sparkles
   trail(orb, dir) {
+    if (orb.userData.fire) {
+      this._fireTrail(orb);
+      return;
+    }
     this.light.color.set(0xb090ff);
     const p = orb.position;
     // two directions at right angles to the flight direction
@@ -185,6 +199,21 @@ export class SpellFx {
     orb.userData.halo.scale.setScalar(1 + Math.sin(this.time * 35) * 0.2);
     this.light.position.copy(p);
     this.orbGlow = 2.5 + Math.sin(this.time * 40) * 0.5;
+  }
+
+  // a fireball leaves flames and smoke behind it
+  _fireTrail(orb) {
+    const p = orb.position;
+    this.light.color.set(0xff7a20);
+    for (let k = 0; k < 4; k++) {
+      randomDir(_v).multiplyScalar(0.5).setY(0.4 + Math.random() * 0.6);
+      this.sparks.spawn(p, _v, FIRE[k % 3], 0.35 + Math.random() * 0.25, -0.5, 1.5);
+    }
+    this.glows.spawn(p, _v.set(0, 0.3, 0), FIRE[1], 0.3);
+    if (Math.random() < 0.4) this.glows.spawn(p, _v.set(0, 0.4, 0), FIRE_SMOKE, 0.8, -0.1, 0.5);
+    orb.userData.halo.scale.setScalar(1 + Math.sin(this.time * 30) * 0.25);
+    this.light.position.copy(p);
+    this.orbGlow = 3.5 + Math.sin(this.time * 33) * 0.8;
   }
 
   // the spell hits a ghost: a burst of embers that drift down, and magic

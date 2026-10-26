@@ -135,6 +135,38 @@ function drawGhost(ctx, x, y, r) {
   ctx.restore();
 }
 
+// a flame (the fire wand)
+function drawFlame(ctx, x, y, r) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor = '#ff7a1a';
+  ctx.shadowBlur = 18;
+  for (const [scale, color] of [[1, '#ff5a10'], [0.68, '#ffa030'], [0.38, '#fff0a0']]) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, -r * scale);
+    ctx.bezierCurveTo(r * 0.8 * scale, -r * 0.2 * scale, r * 0.7 * scale, r * 0.8 * scale, 0, r * 0.85 * scale);
+    ctx.bezierCurveTo(-r * 0.7 * scale, r * 0.8 * scale, -r * 0.8 * scale, -r * 0.2 * scale, 0, -r * scale);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  ctx.restore();
+}
+
+// soft dark (or red) edges around the view: a ring that fades to clear in the middle
+function vignetteTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(128, 128, 40, 128, 128, 128);
+  g.addColorStop(0, 'rgba(255,255,255,0)');
+  g.addColorStop(0.55, 'rgba(255,255,255,0.25)');
+  g.addColorStop(1, 'rgba(255,255,255,1)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(c);
+}
+
 export class Hud {
   constructor(camera) {
     this.root = new THREE.Group();
@@ -154,6 +186,17 @@ export class Hud {
     this.flashMesh.renderOrder = 1000;
     this.flashMesh.visible = false;
     this.root.add(this.flashMesh);
+
+    // edges of the view: black while running (comfort in VR), pulsing red when danger is close
+    this.vignetteMat = new THREE.MeshBasicMaterial({ map: vignetteTexture(), color: 0x000000, transparent: true, opacity: 0, depthTest: false, depthWrite: false });
+    this.vignette = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.1), this.vignetteMat);
+    this.vignette.position.z = -0.25;
+    this.vignette.renderOrder = 998;
+    this.vignette.visible = false;
+    this.root.add(this.vignette);
+    this.run = 0;
+    this.danger = 0;
+    this.time = 0;
 
     // black fade between the areas of the house (in front of everything else)
     this.fadeMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthTest: false, depthWrite: false });
@@ -181,34 +224,49 @@ export class Hud {
   // lives as pumpkins, the pentagram's state, the potion's sight, and the score.
   // shield: { state, seconds, progress } or null; vision: seconds of potion sight left (0 = none)
   // goal: { done, need } while an area's ghosts are still to be banished (shown instead of the score)
-  setStatus({ lives, maxLives, score, shield = null, vision = 0, goal = null }) {
+  // fire: seconds of the fire wand left; stamina: 0..1 for running (bar shown when not full)
+  setStatus({ lives, maxLives, score, shield = null, vision = 0, goal = null, fire = 0, stamina = 1 }) {
     const p = this.status;
     const ring = shield?.state === 'charging' ? Math.floor(shield.progress * 20) : 0;
-    const key = `${lives}/${maxLives}/${score}/${shield?.state}/${shield?.seconds}/${ring}/${vision}/${goal?.done}/${goal?.need}`;
+    const bar = Math.round(stamina * 20);
+    const key = `${lives}/${maxLives}/${score}/${shield?.state}/${shield?.seconds}/${ring}/${vision}/${goal?.done}/${goal?.need}/${fire}/${bar}`;
     if (p.key === key) return;
     p.key = key;
     const { ctx, canvas } = p;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'left';
-    for (let i = 0; i < maxLives; i++) drawPumpkin(ctx, 55 + i * 85, 66, 32, i < lives);
+    for (let i = 0; i < maxLives; i++) drawPumpkin(ctx, 45 + i * 78, 60, 30, i < lives);
+    // stamina bar under the pumpkins
+    if (stamina < 0.995) {
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(20, 104, 210, 10);
+      ctx.fillStyle = stamina < 0.3 ? '#ff5a3a' : '#ffd36b';
+      ctx.fillRect(20, 104, 210 * stamina, 10);
+    }
 
     if (shield) {
-      drawPentagram(ctx, 320, 64, 28, shield.state, shield.progress);
+      drawPentagram(ctx, 300, 64, 28, shield.state, shield.progress);
       ctx.font = `48px ${NUMBER_FONT}`;
       ctx.fillStyle = shield.state === 'active' ? '#66ffd9' : shield.state === 'ready' ? '#b69cff' : '#6a6290';
-      if (shield.state !== 'charging') ctx.fillText(shield.state === 'active' ? `${shield.seconds}` : 'ok', 362, 68);
+      if (shield.state !== 'charging') ctx.fillText(shield.state === 'active' ? `${shield.seconds}` : 'ok', 338, 68);
     }
     if (vision > 0) {
-      drawEye(ctx, 480, 64, 30);
-      ctx.font = `48px ${NUMBER_FONT}`;
+      drawEye(ctx, 430, 64, 28);
+      ctx.font = `46px ${NUMBER_FONT}`;
       ctx.fillStyle = '#3dff9a';
-      ctx.fillText(`${vision}`, 520, 68);
+      ctx.fillText(`${vision}`, 466, 68);
     }
-    drawGhost(ctx, 640, 62, 32);
-    ctx.font = `${goal ? 50 : 60}px ${NUMBER_FONT}`;
+    if (fire > 0) {
+      drawFlame(ctx, 545, 62, 32);
+      ctx.font = `46px ${NUMBER_FONT}`;
+      ctx.fillStyle = '#ffa030';
+      ctx.fillText(`${fire}`, 572, 68);
+    }
+    drawGhost(ctx, 662, 62, 30);
+    ctx.font = `${goal ? 46 : 56}px ${NUMBER_FONT}`;
     ctx.fillStyle = goal ? '#ffd36b' : '#e8fff8';
-    ctx.fillText(goal ? `${goal.done}/${goal.need}` : `${score}`, 678, 70);
+    ctx.fillText(goal ? `${goal.done}/${goal.need}` : `${score}`, 698, 70);
     p.texture.needsUpdate = true;
   }
 
@@ -228,6 +286,18 @@ export class Hud {
     this.flashMat.opacity = strength;
   }
 
+  // a big title for a moment (e.g. when entering a new part of the house)
+  announce(title, sub, seconds = 4) {
+    this._drawMessage(title, sub);
+    this.toastTime = seconds;
+  }
+
+  // run: 0..1 darkens the view edges while running; danger: 0..1 pulses them red
+  setEdges(run, danger) {
+    this.run = run;
+    this.danger = danger;
+  }
+
   // 0 = clear, 1 = black
   setFade(k) {
     this.fadeMat.opacity = k;
@@ -243,6 +313,13 @@ export class Hud {
   }
 
   update(dt) {
+    this.time += dt;
+    const beat = Math.pow(Math.max(0, Math.sin(this.time * (5 + this.danger * 5))), 6);
+    const red = this.danger * (0.25 + 0.45 * beat);
+    const dark = this.run * 0.75;
+    this.vignetteMat.opacity = Math.min(0.9, Math.max(red, dark));
+    this.vignetteMat.color.setRGB(red > dark ? 0.6 : 0, 0, 0);
+    this.vignette.visible = this.vignetteMat.opacity > 0.01;
     if (this.flashMat.opacity > 0) this.flashMat.opacity = Math.max(0, this.flashMat.opacity - dt * 1.2);
     this.flashMesh.visible = this.flashMat.opacity > 0;
     if (this.toastTime > 0) {

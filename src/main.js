@@ -1,7 +1,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { SpookyAudio } from './audio.js';
 import { createRoom } from './room.js';
-import { createHallway, createStairwell, createFoyer } from './house.js';
+import { createHallway, createStairwell, createFoyer, createYard } from './house.js';
 import { Ghost } from './ghost.js';
 import { Key } from './key.js';
 import { Hud } from './hud.js';
@@ -12,6 +12,7 @@ import { Shield } from './shield.js';
 import { Scares } from './scares.js';
 import { Horror } from './horror.js';
 import { Potion } from './potion.js';
+import { FireCrystal } from './powerup.js';
 import { makeWand } from './wand.js';
 import { sparkle } from './textures.js';
 import { walk, floorDirections, snapTurn, setArea as setWalkArea } from './movement.js';
@@ -38,32 +39,44 @@ const DIFFICULTIES = {
     note: 'Sound only · fast ghosts',
   },
 };
-// The haunted house, one area after another. In each area banish `goal` creatures
-// (first the ones in `plan`, then any of `types`); then a key appears (or, in the
-// last area, the boss comes) and the way to the next area opens.
+// The haunted house, one area after another, each harder than the last. In each
+// area banish `goal` creatures (first the ones in `plan`, then any of `types`),
+// up to `together` at once, moving `speed` times faster. Then a key appears and,
+// when you grab it, `chase` creatures come after you: RUN to the door! In the
+// yard the guardian comes instead, and after it a horde chases you to the gate.
 const AREAS = [
   {
-    build: createRoom, label: 'Bedroom', goal: 5,
+    build: createRoom, label: 'Bedroom', title: 'THE BEDROOM', goal: 5, together: 1, speed: 1.0, chase: 0, chaser: 'walker',
     plan: ['walker', 'flyer', 'crawler', 'walker', 'flyer'], types: ['walker', 'flyer', 'crawler'],
-    intro: 'Escape the haunted house! Banish 5 ghosts to find the key to the door',
+    intro: 'Escape the haunted house! Banish 5 ghosts to find the key',
   },
   {
-    build: createHallway, label: 'Hallway', goal: 4,
-    plan: ['shadow', 'shadow', 'walker', 'shadow'], types: ['shadow', 'shadow', 'walker'],
-    intro: 'The Hallway: banish 4 creatures. Shadow people only move when you are NOT looking at them!',
+    build: createHallway, label: 'Hallway', title: 'THE HALLWAY', goal: 6, together: 2, speed: 1.1, chase: 2, chaser: 'walker',
+    plan: ['shadow', 'walker', 'shadow', 'flyer', 'shadow', 'shadow'], types: ['shadow', 'walker', 'flyer'],
+    intro: 'Banish 6. Shadow people only move when you are NOT looking at them!',
   },
   {
-    build: createStairwell, label: 'Stairs', goal: 4,
-    plan: ['bats', 'bats', 'flyer', 'bats'], types: ['bats', 'bats', 'flyer', 'crawler'],
-    intro: 'The Staircase: chase away 4 bat swarms to clear the way down',
+    build: createStairwell, label: 'Stairs', title: 'THE STAIRCASE', goal: 7, together: 2, speed: 1.2, chase: 2, chaser: 'wraith',
+    plan: ['bats', 'bats', 'wraith', 'bats', 'flyer', 'wraith', 'bats'], types: ['bats', 'wraith', 'flyer', 'crawler'],
+    intro: 'Chase away 7 creatures. Beware the wraiths: they blink closer!',
   },
   {
-    build: createFoyer, label: 'Front hall', goal: 3,
-    plan: ['walker', 'crawler', 'flyer'], types: ['walker', 'flyer', 'crawler', 'shadow'],
-    boss: { hp: 5 },
-    intro: 'The Entrance Hall: banish 3 ghosts… then face the guardian of the front door',
+    build: createFoyer, label: 'Front hall', title: 'THE ENTRANCE HALL', goal: 8, together: 2, speed: 1.3, chase: 3, chaser: 'skeleton',
+    plan: ['skeleton', 'walker', 'wraith', 'skeleton', 'shadow', 'skeleton', 'crawler', 'wraith'],
+    types: ['skeleton', 'wraith', 'shadow', 'walker', 'flyer', 'crawler'],
+    intro: 'Banish 8. Skeletons need 2 hits! The front door key is here somewhere',
+  },
+  {
+    build: createYard, label: 'Yard', title: 'THE GRAVEYARD', goal: 9, together: 3, speed: 1.4, chase: 0, chaser: 'werewolf',
+    plan: ['werewolf', 'skeleton', 'bats', 'werewolf', 'wraith', 'skeleton', 'werewolf', 'bats', 'werewolf'],
+    types: ['werewolf', 'skeleton', 'wraith', 'bats', 'shadow'],
+    boss: { hp: 6 }, horde: true,
+    intro: 'Almost out! Banish 9… then the guardian of the gate comes',
   },
 ];
+const RUN_SPEED = 2;       // running is this many times faster than walking
+const STAMINA_TIME = 4;    // seconds of running on a full bar
+const STAMINA_REFILL = 5;  // seconds to fill it again
 const FADE = 0.6;   // seconds to fade to black (and back) between areas
 
 const SPELL_SPEED = 10;
@@ -109,6 +122,7 @@ const vrMenu = new VrMenu(scene);
 const shield = new Shield(scene);
 const scares = new Scares(scene, audio);
 const potion = new Potion(scene, audio);
+const fire = new FireCrystal(scene, audio);
 const horror = new Horror(scene, audio, room);
 const key = new Key(scene, audio);
 
@@ -155,10 +169,15 @@ const exitMarker = (() => {
 const GHOST_INTROS = {
   flyer: 'Something is flying above you… look up!',
   crawler: 'Something is knocking under the floor… look down!',
-  demon: 'THE GUARDIAN! A red demon: 5 hits to banish it, it takes 2 lives!',
+  demon: 'THE GUARDIAN! A red demon: 6 hits to banish it, it takes 2 lives! Use the fire crystal!',
   shadow: 'A shadow person! It only moves when you are NOT looking. Turn to its soft steps to freeze it',
   bats: 'Bats! Listen for the fluttering wings above and below you',
+  wraith: 'A WRAITH! Listen for its chains. It blinks closer, so be quick!',
+  skeleton: 'A SKELETON! Rattling bones. It takes 2 hits!',
+  werewolf: 'A WEREWOLF! It howls, then sprints at you. 2 hits!',
 };
+const SPEEDS = { demon: 1.15, shadow: 1.35, bats: 1.1, wraith: 1.25, skeleton: 0.95, werewolf: 1.0 };
+const NAMES = { demon: 'demon', skeleton: 'skeleton', werewolf: 'werewolf' };
 
 // ---- VR controllers -------------------------------------------------------
 
@@ -229,6 +248,10 @@ let startArea = 0;      // where the next game starts
 try { progress = Math.min(AREAS.length - 1, Number(localStorage.getItem('maxiween-progress')) || 0); } catch {}
 startArea = progress;
 const lookDir = new THREE.Vector3();
+let stamina = 1;          // 0..1 for running
+let exhausted = false;    // ran the bar empty: wait until it refills a bit
+let running = 0;          // 0..1, smoothed, for the view edges
+let hordeTimer = 0;       // the yard after the boss: seconds until the next chaser
 let level = 'easy';
 let cfg = DIFFICULTIES.easy;
 let restartOnContinue = false;
@@ -242,8 +265,15 @@ function huntingGhosts() {
   return ghosts.filter((g) => g.alive);
 }
 
+// faster in later areas, and a bit faster with every creature banished in the area
 function ghostSpeed() {
-  return Math.min(cfg.speed + score * cfg.speedStep, cfg.maxSpeed);
+  return Math.min(cfg.speed + goalDone * cfg.speedStep, cfg.maxSpeed) * AREAS[areaIndex].speed;
+}
+
+// how many creatures may hunt at once: the area's number, one less on Easy, one more on Hard
+function together() {
+  const n = AREAS[areaIndex].together + (level === 'easy' ? -1 : level === 'hard' ? 1 : 0);
+  return Math.max(1, Math.min(n, AREAS[areaIndex].goal - goalDone));
 }
 
 function clearWorld() {
@@ -253,6 +283,7 @@ function clearWorld() {
   fx.clear();
   scares.reset();
   potion.reset();
+  fire.reset();
   horror.reset();
   audio.stopDread();
   key.hide();
@@ -285,7 +316,9 @@ function loadArea(index) {
   setWalkArea(info);
   shield.setCenter(info.circle.x, info.circle.z);
   potion.setArea(info);
+  fire.setArea(info);
   scares.setArea(info);
+  scene.fog = info.outdoor ? new THREE.FogExp2(0x070a14, 0.045) : null;
   horror.allowDoor = true;
   horror.setArea(room);
   rig.position.set(info.entry.x, 0, info.entry.z);
@@ -306,10 +339,14 @@ function beginArea(index) {
   areaSpawns = 0;
   exitOpen = 0;
   state = 'playing';
+  stamina = 1;
+  exhausted = false;
   vrMenu.hide();
   hud.setMessage();
-  hud.toast(AREAS[index].intro, 4.5);
-  scheduleSpawn(3);
+  hud.announce(AREAS[index].title, AREAS[index].intro, 5);
+  audio.areaStinger();
+  audio.musicTension = index / (AREAS.length - 1);
+  scheduleSpawn(3.5);
   if (index > progress) {
     progress = index;
     try { localStorage.setItem('maxiween-progress', String(progress)); } catch {}
@@ -325,10 +362,11 @@ function onGoalReached() {
   const info = room.info;
   if (a.boss) {
     phase = 'boss';
-    hud.toast('The house shakes… something huge is coming through the front door!', 3);
-    setTimeout(() => { if (phase === 'boss' && state === 'playing') spawnBoss(); }, 3000);
+    hud.announce('THE GUARDIAN', 'The ground shakes… something huge is coming through the gate!', 3.5);
+    fire.soon(0.5);   // a fire crystal to fight it with
+    setTimeout(() => { if (phase === 'boss' && state === 'playing') spawnBoss(); }, 4000);
   } else if (info.noKey) {
-    openExit('The way down is clear! Walk to the top of the stairs');
+    openExit(a.chase ? 'The way down is clear! Something is coming… RUN for the stairs!' : 'The way down is clear!', a.chase);
   } else {
     phase = 'key';
     key.show(info.keySpot.x, info.keySpot.z);
@@ -336,8 +374,8 @@ function onGoalReached() {
   }
 }
 
-// the way to the next area opens
-function openExit(message) {
+// the way to the next area opens; chasers: creatures that come after you now, RUN!
+function openExit(message, chasers = 0) {
   phase = 'exit';
   horror.allowDoor = false;
   horror.reset();
@@ -345,7 +383,19 @@ function openExit(message) {
   audio.at(info.exitPoint, (voice) => audio.unlock(voice));
   exitMarker.position.set(info.exitZone.x, 0, info.exitZone.z);
   exitMarker.visible = true;
-  hud.toast(message, 3.5);
+  if (chasers > 0) {
+    hud.announce('RUN!', message, 3);
+    audio.stinger();
+    for (let i = 0; i < chasers; i++) setTimeout(() => { if (phase === 'exit' && state === 'playing') spawnChaser(); }, 600 + i * 1400);
+  } else {
+    hud.toast(message, 3.5);
+  }
+}
+
+// a creature that comes after you from behind, fast
+function spawnChaser() {
+  const angle = playerYaw() + Math.PI + (Math.random() - 0.5) * 0.8;
+  spawnGhost(AREAS[areaIndex].chaser, { angle, chaser: true });
 }
 
 // the player walks through the open exit: fade to black and on to the next area
@@ -367,13 +417,16 @@ function updateTransition(dt) {
   if (t >= FADE && !transition.swapped) {
     transition.swapped = true;
     if (transition.escape) {
-      // the view out of the front door, with celebration sparkles
-      rig.position.set(0, 0, -1.6);
+      // outside the gate: free! the moonlit night, with celebration sparkles
+      for (const g of ghosts) g.dispose();
+      ghosts = [];
+      const gate = room.info.exitPoint;
+      rig.position.set(gate.x, 0, gate.z - 2);
       rig.rotation.set(0, 0, 0);
       rig.updateMatrixWorld(true);
       yaw = 0;
-      pitch = 0.05;
-      for (let i = 0; i < 4; i++) setTimeout(() => fx.hit(_v3.set((Math.random() - 0.5) * 1.5, 1.6 + Math.random() * 0.6, -4.4), false), 300 + i * 450);
+      pitch = 0.15;
+      for (let i = 0; i < 6; i++) setTimeout(() => fx.hit(_v3.set(gate.x + (Math.random() - 0.5) * 3, 2.2 + Math.random(), gate.z - 6), i % 2 === 0), 300 + i * 400);
     } else {
       beginArea(transition.target);
       state = 'transition';
@@ -387,18 +440,22 @@ function updateTransition(dt) {
   }
 }
 
-// out of the front door: the end! Fade to black, then stand in the hall
-// looking out through the open front door at the moonlit night
+// out of the gate: the end! Fade to black, then stand outside the graveyard, free
 function escape() {
   state = 'escaped';
   overAt = now;
   exitMarker.visible = false;
   audio.stopDread();
   audio.win();
+  // nothing may talk over the victory
+  potion.reset();
+  fire.reset();
+  scares.reset();
+  horror.reset();
   transition = { t: 0, escape: true, swapped: false };
   const seconds = Math.round(now - playStart);
   const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-  const line = `You banished ${score} creatures in ${time}`;
+  const line = `You banished ${score} creature${score === 1 ? '' : 's'} in ${time}`;
   if (mode === 'vr') {
     setTimeout(() => vrMenu.show({ title: 'YOU ESCAPED!', subtitle: line, action: 'PLAY AGAIN' }, camera), 2500);
   } else {
@@ -406,7 +463,7 @@ function escape() {
   }
 }
 
-// the red demon guards the front door
+// the red demon guards the gate
 function spawnBoss() {
   audio.stinger();
   const from = room.info.bossFrom;
@@ -458,6 +515,7 @@ function gameOver() {
   spawnTimes = [];
   audio.stopDread();
   potion.reset();
+  fire.reset();
   horror.reset();
   audio.gameOver();
   key.hide();
@@ -484,14 +542,12 @@ function nextAreaType() {
   return type;
 }
 
-const SPEEDS = { demon: 1.15, shadow: 1.35, bats: 1.1 };
-
-function spawnGhost(type = nextAreaType(), { angle: fixedAngle, hp, boss = false } = {}) {
+function spawnGhost(type = nextAreaType(), { angle: fixedAngle, hp, boss = false, chaser = false } = {}) {
   let angle = fixedAngle;
   const spawnAngles = room.info.spawnAngles;
   if (angle !== undefined) {
+    if (!seenTypes.has(type) && GHOST_INTROS[type]) hud.toast(GHOST_INTROS[type], 3);
     seenTypes.add(type);
-    if (GHOST_INTROS[type]) hud.toast(GHOST_INTROS[type], 3);
   } else if (!seenTypes.has(type)) {
     // the first ghost of each kind comes from roughly in front, so it is easy to learn
     angle = playerYaw() + (Math.random() - 0.5) * 1.0;
@@ -514,7 +570,8 @@ function spawnGhost(type = nextAreaType(), { angle: fixedAngle, hp, boss = false
   if (type === 'flyer') elevation = THREE.MathUtils.randFloat(0.6, 1.2);
   else if (type === 'crawler') elevation = -THREE.MathUtils.randFloat(0.6, 1.1);
   else if (type === 'bats') elevation = THREE.MathUtils.randFloat(0.5, 1.0) * (Math.random() < 0.5 ? -1 : 1);   // up the stairwell or up from the stairs
-  const speed = ghostSpeed() * (SPEEDS[type] || 1);
+  else if (type === 'wraith') elevation = THREE.MathUtils.randFloat(0.3, 0.8);
+  const speed = ghostSpeed() * (SPEEDS[type] || 1) * (chaser ? 1.5 : 1);
   const ghost = new Ghost(scene, audio, {
     type, angle, elevation, speed, pitch: 0.85 + Math.random() * 0.3, head: player, hp,
   });
@@ -525,11 +582,13 @@ function spawnGhost(type = nextAreaType(), { angle: fixedAngle, hp, boss = false
 // ---- casting spells -------------------------------------------------------
 
 function cast(origin, dir, controller = null) {
-  if (now - lastCast < CAST_COOLDOWN) return;
+  const fireOn = fire.fireActive;
+  if (now - lastCast < (fireOn ? 0.2 : CAST_COOLDOWN)) return;
   lastCast = now;
-  audio.cast();
-  room.flash(0.5);
-  fx.cast(origin, dir);
+  if (fireOn) audio.fireCast();
+  else audio.cast();
+  room.flash(fireOn ? 0.8 : 0.5);
+  fx.cast(origin, dir, fireOn);
   if (controller) {
     pulse(controller, 0.3, 40);
     controller.userData.wand.userData.power = 3;
@@ -541,7 +600,7 @@ function cast(origin, dir, controller = null) {
   // aim assist: the ghost nearest to where you pointed (up, down or around), within the cone
   let target = null;
   let harmless = false;
-  let best = THREE.MathUtils.degToRad(cfg.aim);
+  let best = THREE.MathUtils.degToRad(cfg.aim + (fireOn ? 10 : 0));
   for (const g of ghosts) {
     if (g.state !== 'hunting') continue;
     for (const p of g.bodyPoints()) {
@@ -559,10 +618,10 @@ function cast(origin, dir, controller = null) {
   }
   if (target) target.doomed = true;
 
-  const orb = fx.makeOrb();
+  const orb = fx.makeOrb(fireOn);
   orb.position.copy(origin);
   const vel = dir.clone().normalize().multiplyScalar(SPELL_SPEED);
-  spells.push({ orb, vel, target, harmless, life: target ? 2 : 0.6, controller });
+  spells.push({ orb, vel, target, harmless, life: target ? 2 : 0.6, controller, fire: fireOn });
 }
 
 function updateSpells(dt) {
@@ -573,8 +632,8 @@ function updateSpells(dt) {
       const to = s.target.chestPosition(_v1).sub(s.orb.position);
       const dist = to.length();
       if (dist < SPELL_SPEED * dt + 0.25 || s.life <= 0) {
-        fx.hit(s.target.chestPosition(_v1), s.target.type === 'demon');
-        onHit(s.target, s.controller);
+        fx.hit(s.target.chestPosition(_v1), s.target.type === 'demon' || s.fire);
+        onHit(s.target, s.controller, s.fire ? 2 : 1);
         s.done = true;
       } else {
         s.vel.lerp(to.multiplyScalar(SPELL_SPEED / dist), Math.min(1, dt * SPELL_STEER)).setLength(SPELL_SPEED);
@@ -595,13 +654,15 @@ function updateSpells(dt) {
   spells = spells.filter((s) => !s.done);
 }
 
-function onHit(ghost, controller) {
+// damage: 2 for a fireball
+function onHit(ghost, controller, damage = 1) {
   if (ghost.state !== 'hunting') return;
-  if (ghost.hp > 1) {
-    // the demon needs more than one hit
-    ghost.hurt(player);
+  if (ghost.hp > damage) {
+    // tougher creatures need more than one hit
+    ghost.hurt(player, damage);
     room.flash(0.8);
-    hud.toast(`The ${ghost.isBoss ? 'guardian' : 'demon'} is hurt! ${ghost.hp} more hit${ghost.hp === 1 ? '' : 's'}!`, 1.8);
+    const name = ghost.isBoss ? 'guardian' : NAMES[ghost.type] || 'creature';
+    hud.toast(`The ${name} is hurt! ${ghost.hp} more hit${ghost.hp === 1 ? '' : 's'}!`, 1.8);
     if (controller) pulse(controller, 0.9, 150);
     return;
   }
@@ -611,7 +672,8 @@ function onHit(ghost, controller) {
   if (controller) pulse(controller, 0.7, 120);
   if (ghost.isBoss) {
     room.setExit(0);
-    openExit('You beat the guardian! The front door is opening… ESCAPE!');
+    hordeTimer = 2;
+    openExit('You beat the guardian! The gate is opening… they are all coming. RUN TO THE GATE!', 2);
     return;
   }
   if (phase !== 'fight') return;
@@ -663,10 +725,21 @@ function updateGame(dt) {
     const due = spawnTimes.filter((t) => t <= now);
     spawnTimes = spawnTimes.filter((t) => t > now);
     for (let i = 0; i < due.length; i++) spawnGhost();
-    if (huntingGhosts().length === 0 && spawnTimes.length === 0) scheduleSpawn(1.6);
+    if (huntingGhosts().length + spawnTimes.length < together()) scheduleSpawn(1.2 + Math.random() * 1.8);
   }
   if (state === 'playing' && phase === 'key' && key.update(dt, player) === 'picked') {
-    openExit(room.info.id === 'bedroom' ? 'The door unlocked! Walk through it' : 'The door at the end unlocked! Walk through it');
+    const a = AREAS[areaIndex];
+    const where = room.info.id === 'bedroom' ? 'The door unlocked! Walk through it'
+      : room.info.id === 'foyer' ? 'The front door unlocked! Get outside!' : 'The door at the end unlocked!';
+    openExit(a.chase ? `${where} Something is coming after you!` : where, a.chase);
+  }
+  // after the guardian: the dead keep coming until you are out of the gate
+  if (state === 'playing' && phase === 'exit' && AREAS[areaIndex].horde) {
+    hordeTimer -= dt;
+    if (hordeTimer <= 0 && huntingGhosts().length < 4) {
+      hordeTimer = 2.4;
+      spawnChaser();
+    }
   }
   // the way out swings open, glows, and leads on when you step into it
   if (phase === 'exit') {
@@ -681,7 +754,9 @@ function updateGame(dt) {
 
   updateShield(dt);
   updatePotion(dt);
+  updateFire(dt);
   const safe = shield.active && shield.contains(player);
+  updateAdrenaline(dt);
 
   // dread music while the red demon hunts: louder and faster the closer it gets
   const demon = ghosts.find((g) => g.type === 'demon' && g.alive);
@@ -732,7 +807,45 @@ function updateGame(dt) {
     shield: state === 'playing' ? { state: shield.state, seconds: shield.secondsLeft, progress: shield.progress } : null,
     vision: potion.visionActive ? potion.secondsLeft : 0,
     goal: state === 'playing' && phase === 'fight' ? { done: goalDone, need: AREAS[areaIndex].goal } : null,
+    fire: fire.fireActive ? fire.secondsLeft : 0,
+    stamina,
   });
+}
+
+// the fire crystal: walk over it for 30 seconds of fireballs
+function updateFire(dt) {
+  const event = fire.update(dt, player, state === 'playing');
+  if (event === 'appear') {
+    hud.toast('A FIRE CRYSTAL! Listen for the crackling fire and grab it', 3);
+  } else if (event === 'pickup') {
+    hud.announce('FIRE WAND!', 'Fireballs for 30 seconds: fast and double damage!', 2.5);
+    hud.flash(0xff7a20, 0.4);
+    for (const c of controllers) pulse(c, 0.8, 200);
+  } else if (event === 'gone') {
+    hud.toast('The fire crystal burned out…', 1.6);
+  } else if (event === 'tick') {
+    audio.tick();
+  } else if (event === 'fireEnd') {
+    audio.fireEnd();
+    hud.toast('The fire is out. Back to normal spells', 1.8);
+  }
+  for (const wand of [...controllers.map((c) => c.userData.wand), laptopWand]) wand.userData.setFire(fire.fireActive);
+}
+
+// adrenaline: a heartbeat, pulsing red edges and controller pulses when danger is close
+function updateAdrenaline(dt) {
+  let danger = 0;
+  if (state === 'playing') {
+    for (const g of ghosts) {
+      if (!g.alive) continue;
+      const d = Math.hypot(g.pos.x - player.x, g.pos.z - player.z);
+      danger = Math.max(danger, THREE.MathUtils.clamp(1 - (d - 0.7) / 3.5, 0, 1));
+    }
+    if (lives === 1) danger = Math.max(danger, 0.25);
+    if (phase === 'exit' && AREAS[areaIndex].horde) danger = Math.max(danger, 0.4);
+  }
+  if (audio.updateHeart(dt, danger)) for (const c of controllers) pulse(c, 0.1 + 0.4 * danger, 45);
+  hud.setEdges(mode === 'vr' ? running : running * 0.6, danger);
 }
 
 // the potion of visibility: walk over it to see the ghosts for 15 seconds
@@ -798,7 +911,10 @@ function updateVrColors() {
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 function updateLocomotion(dt) {
-  if (paused || state !== 'playing') return;   // (not while fading between areas)
+  if (paused || state !== 'playing') {   // (not while fading between areas)
+    running += (0 - running) * Math.min(1, dt * 6);
+    return;
+  }
   let ahead = 0, side = 0;
   if (mode === 'laptop') {
     ahead = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
@@ -824,9 +940,26 @@ function updateLocomotion(dt) {
       }
     }
   }
+  // running: Shift on the laptop; in VR hold a grip button (or click the left stick)
+  const wantsRun = mode === 'laptop'
+    ? keys.has('ShiftLeft') || keys.has('ShiftRight')
+    : controllers.some((c) => c.userData.source?.gamepad?.buttons?.[1]?.pressed || c.userData.source?.gamepad?.buttons?.[3]?.pressed);
   const amount = Math.hypot(ahead, side);
+  const isRunning = wantsRun && amount > 0 && !exhausted && stamina > 0;
+  if (isRunning) {
+    stamina = Math.max(0, stamina - dt / STAMINA_TIME);
+    if (stamina === 0) {
+      exhausted = true;
+      audio.playerPant();
+      hud.toast('Out of breath!', 1.2);
+    }
+  } else {
+    stamina = Math.min(1, stamina + dt / STAMINA_REFILL);
+    if (stamina > 0.35) exhausted = false;
+  }
+  running += ((isRunning ? 1 : 0) - running) * Math.min(1, dt * 6);
   if (amount === 0) return;
-  const scale = (Math.min(1, amount) / amount) * WALK_SPEED * dt;  // diagonals aren't faster
+  const scale = (Math.min(1, amount) / amount) * WALK_SPEED * (isRunning ? RUN_SPEED : 1) * dt;  // diagonals aren't faster
   floorDirections(camera, _fwd, _right);
   walk(rig, camera, (_fwd.x * ahead + _right.x * side) * scale, (_fwd.z * ahead + _right.z * side) * scale);
 }
@@ -999,7 +1132,7 @@ laptopBtn.addEventListener('click', () => {
 // realistic/outline room, or nothing at all in mixed reality so the real room shows
 function applyRoomStyle() {
   room.setStyle(mixedReality ? 'mr' : roomStyle);
-  scene.background = mixedReality ? null : new THREE.Color(0x000000);
+  scene.background = mixedReality ? null : new THREE.Color(room.info.outdoor ? 0x070a14 : 0x000000);
 }
 
 // not remembered between visits: every launch starts in the realistic room,
@@ -1109,6 +1242,9 @@ if (new URLSearchParams(location.search).has('debug')) window.debug = {
   // jump to a part of the house: debug.goto(1)
   goto: (index) => beginArea(index),
   reachGoal: () => { goalDone = AREAS[areaIndex].goal; onGoalReached(); },
+  fire,
+  fireNow: () => { fire.fire = 30; },
+  stamina: () => stamina,
   moveTo: (x, z) => { rig.position.set(x, 0, z); rig.updateMatrixWorld(true); },
   hitAll: () => ghosts.filter((g) => g.alive).forEach((g) => onHit(g)),
   ghosts: () => ghosts.map((g) => ({ type: g.type, hp: g.hp, x: +g.pos.x.toFixed(2), z: +g.pos.z.toFixed(2), frozen: g.frozen, boss: Boolean(g.isBoss) })),
