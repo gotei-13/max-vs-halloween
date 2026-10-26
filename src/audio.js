@@ -694,6 +694,28 @@ export class SpookyAudio {
     for (const f of [262, 330, 392]) this._vocal(this.master, t + 0.1, 1.4, f, f, 'a', 0.07, { vibrato: 5, depth: 2, attack: 0.3 });
   }
 
+  // the waiting Holy Bell rings softly
+  bellTinkle(voice) {
+    const t = this.ctx.currentTime;
+    this._bell(voice, 1568, t, 0.12, 1.2);
+    this._bell(voice, 2093, t + 0.12, 0.08, 1);
+  }
+
+  // ringing the Holy Bell: a huge church bell, a rush of air and a choir
+  bellBlast() {
+    const t = this.ctx.currentTime;
+    this._bell(this.master, 110, t, 0.6, 6);
+    this._bell(this.master, 220, t + 0.02, 0.35, 5);
+    this._thud(this.master, t, 90, 3.5, 1.4);
+    const n = this._noiseSource(t, 1.8);
+    const bp = this._filter('bandpass', 300, 0.6);
+    bp.frequency.exponentialRampToValueAtTime(4000, t + 0.6);
+    bp.frequency.exponentialRampToValueAtTime(500, t + 1.7);
+    const g = this._envelope(t, 0.05, 1.7, 1.2);
+    n.connect(bp).connect(g).connect(this.master);
+    for (const f of [262, 330, 392, 523]) this._vocal(this.master, t + 0.3, 3, f, f, 'a', 0.1, { vibrato: 5, depth: 2, attack: 0.4 });
+  }
+
   // escaped! bells and a bright choir
   win() {
     const t = this.ctx.currentTime;

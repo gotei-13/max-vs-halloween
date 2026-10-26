@@ -153,6 +153,30 @@ function drawFlame(ctx, x, y, r) {
   ctx.restore();
 }
 
+// the Holy Bell (ready to ring)
+function drawBell(ctx, x, y, r) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowColor = '#ffe9a0';
+  ctx.shadowBlur = 18;
+  ctx.fillStyle = '#ffd36b';
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.15, -r * 0.85);
+  ctx.quadraticCurveTo(-r * 0.6, -r * 0.8, -r * 0.62, -r * 0.1);
+  ctx.quadraticCurveTo(-r * 0.66, r * 0.45, -r * 0.95, r * 0.6);
+  ctx.lineTo(r * 0.95, r * 0.6);
+  ctx.quadraticCurveTo(r * 0.66, r * 0.45, r * 0.62, -r * 0.1);
+  ctx.quadraticCurveTo(r * 0.6, -r * 0.8, r * 0.15, -r * 0.85);
+  ctx.closePath();
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#a08040';
+  ctx.beginPath();
+  ctx.arc(0, r * 0.75, r * 0.16, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 // soft dark (or red) edges around the view: a ring that fades to clear in the middle
 function vignetteTexture() {
   const c = document.createElement('canvas');
@@ -225,11 +249,12 @@ export class Hud {
   // shield: { state, seconds, progress } or null; vision: seconds of potion sight left (0 = none)
   // goal: { done, need } while an area's ghosts are still to be banished (shown instead of the score)
   // fire: seconds of the fire wand left; stamina: 0..1 for running (bar shown when not full)
-  setStatus({ lives, maxLives, score, shield = null, vision = 0, goal = null, fire = 0, stamina = 1 }) {
+  // bell: the Holy Bell is ready to ring
+  setStatus({ lives, maxLives, score, shield = null, vision = 0, goal = null, fire = 0, stamina = 1, bell = false }) {
     const p = this.status;
     const ring = shield?.state === 'charging' ? Math.floor(shield.progress * 20) : 0;
     const bar = Math.round(stamina * 20);
-    const key = `${lives}/${maxLives}/${score}/${shield?.state}/${shield?.seconds}/${ring}/${vision}/${goal?.done}/${goal?.need}/${fire}/${bar}`;
+    const key = `${lives}/${maxLives}/${score}/${shield?.state}/${shield?.seconds}/${ring}/${vision}/${goal?.done}/${goal?.need}/${fire}/${bar}/${bell}`;
     if (p.key === key) return;
     p.key = key;
     const { ctx, canvas } = p;
@@ -254,16 +279,22 @@ export class Hud {
       if (shield.state !== 'charging') ctx.fillText(shield.state === 'active' ? `${shield.seconds}` : 'ok', 338, 68);
     }
     if (vision > 0) {
-      drawEye(ctx, 430, 64, 28);
-      ctx.font = `46px ${NUMBER_FONT}`;
+      drawEye(ctx, 412, 64, 26);
+      ctx.font = `44px ${NUMBER_FONT}`;
       ctx.fillStyle = '#3dff9a';
-      ctx.fillText(`${vision}`, 466, 68);
+      ctx.fillText(`${vision}`, 444, 68);
     }
     if (fire > 0) {
-      drawFlame(ctx, 545, 62, 32);
-      ctx.font = `46px ${NUMBER_FONT}`;
+      drawFlame(ctx, 512, 62, 30);
+      ctx.font = `44px ${NUMBER_FONT}`;
       ctx.fillStyle = '#ffa030';
-      ctx.fillText(`${fire}`, 572, 68);
+      ctx.fillText(`${fire}`, 536, 68);
+    }
+    if (bell) {
+      const pulse = 0.75 + 0.25 * Math.sin(performance.now() / 300);
+      ctx.globalAlpha = pulse;
+      drawBell(ctx, 612, 60, 30);
+      ctx.globalAlpha = 1;
     }
     drawGhost(ctx, 662, 62, 30);
     ctx.font = `${goal ? 46 : 56}px ${NUMBER_FONT}`;

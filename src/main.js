@@ -3,7 +3,7 @@ import { SpookyAudio } from './audio.js';
 import { createRoom } from './room.js';
 import { createHallway, createStairwell, createFoyer, createYard } from './house.js';
 import { Ghost } from './ghost.js';
-import { Key, LifePumpkin } from './key.js';
+import { Key, LifePumpkin, HolyBell } from './key.js';
 import { Hud } from './hud.js';
 import { Trail } from './trail.js';
 import { SpellFx } from './fx.js';
@@ -128,6 +128,7 @@ const fire = new FireCrystal(scene, audio);
 const horror = new Horror(scene, audio, room);
 const key = new Key(scene, audio);
 const lifePumpkin = new LifePumpkin(scene, audio);
+const holyBell = new HolyBell(scene, audio);
 
 // a glowing golden ring on the floor, with sparkles rising from it, where the way out is
 const exitMarker = (() => {
@@ -251,6 +252,9 @@ let progress = 0;       // the furthest area reached (saved)
 let startArea = 0;      // where the next game starts
 let runStart = 0;       // where the current run started (only runs from the bedroom set records)
 let lifeShown = false;  // this area's extra life has appeared
+let bellArea = 1;       // the one area of this run where the Holy Bell appears
+let bellShown = false;  // it has appeared this run (it only ever comes once)
+let hasBell = false;    // the player carries it, ready to ring
 try { progress = Math.min(AREAS.length - 1, Number(localStorage.getItem('maxiween-progress')) || 0); } catch {}
 startArea = progress;
 const lookDir = new THREE.Vector3();
@@ -294,6 +298,7 @@ function clearWorld() {
   audio.stopDread();
   key.hide();
   lifePumpkin.hide();
+  holyBell.hide();   // not picked up in its area: gone for this run
   exitMarker.visible = false;
   ghosts = [];
   spells = [];
@@ -560,6 +565,10 @@ function startGame(from = startArea) {
   score = 0;
   lives = cfg.lives;
   runStart = from;
+  // the Holy Bell hides in one random area of the run (never the bedroom)
+  bellArea = Math.max(from, 1) + Math.floor(Math.random() * (AREAS.length - Math.max(from, 1)));
+  bellShown = false;
+  hasBell = false;
   seenTypes.clear();
   playStart = now;
   audio.start();
@@ -746,6 +755,13 @@ function onHit(ghost, controller, damage = 1) {
   if (phase !== 'fight') return;
   goalDone++;
   const need = AREAS[areaIndex].goal;
+  if (areaIndex === bellArea && !bellShown && goalDone >= 2 && goalDone < need) {
+    bellShown = true;
+    const spot = freeSpot();
+    holyBell.show(spot.x, spot.z);
+    hud.announce('THE HOLY BELL', 'It appears only ONCE in the whole game! Listen for it and grab it', 3.5);
+    return;
+  }
   if (goalDone >= need) onGoalReached();
   else if (AREAS[areaIndex].life && !lifeShown && goalDone >= Math.ceil(need / 2)) {
     lifeShown = true;
@@ -817,6 +833,12 @@ function updateGame(dt) {
     lives = Math.min(cfg.maxLives, lives + 1);
     hud.announce('+1 LIFE', `${lives} lives`, 2);
     hud.flash(0xff9a40, 0.3);
+    for (const c of controllers) pulse(c, 0.6, 150);
+  }
+  if (state === 'playing' && holyBell.update(dt, player) === 'picked') {
+    hasBell = true;
+    hud.announce('YOU HAVE THE HOLY BELL', mode === 'vr' ? 'Press A or X to ring it: it banishes every creature around you. Only once!'
+      : 'Press E to ring it: it banishes every creature around you. Only once!', 4);
     for (const c of controllers) pulse(c, 0.6, 150);
   }
   if (state === 'playing' && phase === 'key' && key.update(dt, player) === 'picked') {
@@ -901,6 +923,7 @@ function updateGame(dt) {
     goal: state === 'playing' && phase === 'fight' ? { done: goalDone, need: AREAS[areaIndex].goal } : null,
     fire: fire.fireActive ? fire.secondsLeft : 0,
     stamina,
+    bell: hasBell,
   });
 }
 
@@ -922,6 +945,32 @@ function updateFire(dt) {
     hud.toast('The fire is out. Back to normal spells', 1.8);
   }
   for (const wand of [...controllers.map((c) => c.userData.wand), laptopWand]) wand.userData.setFire(fire.fireActive);
+}
+
+// ring the Holy Bell: every creature around is banished (the guardian loses 3 of its hits)
+function ringBell() {
+  if (!hasBell || state !== 'playing') return;
+  hasBell = false;
+  audio.bellBlast();
+  room.flash(2);
+  hud.flash(0xfff0b0, 0.85);
+  for (const c of controllers) pulse(c, 1, 500);
+  const targets = huntingGhosts();
+  for (const g of targets) {
+    fx.hit(g.chestPosition(_v1), true);
+    onHit(g, null, g.isBoss ? 3 : 99);
+  }
+  spawnTimes = spawnTimes.map((t) => Math.max(t, now + 3));   // a moment of peace
+  if (state === 'playing' && phase === 'fight') hud.announce('THE BELL RINGS!', `${targets.length} creature${targets.length === 1 ? '' : 's'} banished`, 2.5);
+}
+
+// VR: A (right hand) or X (left hand) rings the bell
+function updateBellButton() {
+  for (const c of controllers) {
+    const pressed = Boolean(c.userData.source?.gamepad?.buttons?.[4]?.pressed);
+    if (pressed && !c.userData.bellButtonDown) ringBell();
+    c.userData.bellButtonDown = pressed;
+  }
 }
 
 // adrenaline: a heartbeat, pulsing red edges and controller pulses when danger is close
@@ -1117,6 +1166,7 @@ document.addEventListener('keydown', (e) => {
   if (mode !== 'laptop') return;
   if (e.code === 'Space' && !e.repeat && !paused) { e.preventDefault(); laptopCast(); }
   if (e.code === 'Escape') pause();
+  if (e.code === 'KeyE' && !e.repeat && !paused) ringBell();
   if (e.code === 'KeyR' && !e.repeat && !paused) {
     setRoomStyle(roomStyle === 'realistic' ? 'outline' : 'realistic');
     hud.toast(`Room: ${roomStyle === 'realistic' ? 'Realistic' : 'Glow outlines'} (press R to switch)`, 1.8);
@@ -1340,6 +1390,9 @@ if (new URLSearchParams(location.search).has('debug')) window.debug = {
   reachGoal: () => { goalDone = AREAS[areaIndex].goal; onGoalReached(); },
   fire,
   fireNow: () => { fire.fire = 30; },
+  giveBell: () => { hasBell = true; },
+  ringBell: () => ringBell(),
+  bell: () => ({ bellArea, bellShown, hasBell, active: holyBell.active }),
   stamina: () => stamina,
   moveTo: (x, z) => { rig.position.set(x, 0, z); rig.updateMatrixWorld(true); },
   hitAll: () => ghosts.filter((g) => g.alive).forEach((g) => onHit(g)),
@@ -1404,6 +1457,9 @@ renderer.setAnimationLoop(() => {
   hud.setVisible(mode !== 'none');
   hud.setCrosshair(mode === 'laptop' && state === 'playing');
   hud.update(dt);
-  if (renderer.xr.isPresenting) updateVrColors();
+  if (renderer.xr.isPresenting) {
+    updateVrColors();
+    updateBellButton();
+  }
   renderer.render(scene, camera);
 });

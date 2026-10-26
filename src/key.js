@@ -142,3 +142,69 @@ export class LifePumpkin {
     return null;
   }
 }
+
+// The Holy Bell: appears only once per run. Grab it, keep it, and ring it when
+// you need it most: every creature around you is banished.
+export class HolyBell {
+  constructor(scene, audio) {
+    this.audio = audio;
+    const gold = new THREE.MeshBasicMaterial({ color: 0xffd36b });
+    const profile = [[0, 0.2], [0.04, 0.19], [0.06, 0.12], [0.08, 0.04], [0.12, -0.02], [0.13, -0.04], [0, -0.04]]
+      .map(([x, y]) => new THREE.Vector2(x, y));
+    const bell = new THREE.Mesh(new THREE.LatheGeometry(profile, 16), gold);
+    const clapper = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 6), new THREE.MeshBasicMaterial({ color: 0xa08040 }));
+    clapper.position.y = -0.06;
+    this.bell = new THREE.Group();
+    this.bell.add(bell, clapper);
+    this.haloMat = new THREE.SpriteMaterial({
+      map: sparkle(), color: 0xfff0b0, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const halo = new THREE.Sprite(this.haloMat);
+    halo.scale.setScalar(0.9);
+    this.group = new THREE.Group();
+    this.group.add(this.bell, halo);
+    this.group.visible = false;
+    scene.add(this.group);
+    this.voice = null;
+    this.active = false;
+    this.time = 0;
+  }
+
+  show(x, z) {
+    this.group.position.set(x, 1.15, z);
+    this.group.visible = true;
+    this.active = true;
+    this.voice = this.audio.createVoice();
+    this.audio.setVoicePosition(this.voice, this.group.position);
+    this.audio.keyAppear(this.voice);
+    this.chimeTimer = 1.5;
+  }
+
+  hide() {
+    this.group.visible = false;
+    this.active = false;
+    if (this.voice) this.audio.releaseVoice(this.voice);
+    this.voice = null;
+  }
+
+  // returns 'picked' when the player walks over it
+  update(dt, player) {
+    if (!this.active) return null;
+    this.time += dt;
+    this.bell.rotation.z = Math.sin(this.time * 3) * 0.25;   // swinging gently
+    this.bell.position.y = Math.sin(this.time * 2) * 0.06;
+    this.haloMat.opacity = 0.5 + 0.3 * Math.sin(this.time * 4);
+    this.chimeTimer -= dt;
+    if (this.chimeTimer <= 0) {
+      this.chimeTimer = 1.8;
+      this.audio.bellTinkle(this.voice);
+    }
+    const p = this.group.position;
+    if (Math.hypot(player.x - p.x, player.z - p.z) < 0.8) {
+      this.audio.keyPickup();
+      this.hide();
+      return 'picked';
+    }
+    return null;
+  }
+}
