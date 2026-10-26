@@ -157,6 +157,37 @@ export class SpookyAudio {
     if (Math.random() < 0.25) this._creak(voice, t + 0.03, 0.35, 0.12);
   }
 
+  // a shadow person: a barely-there step, soft and muffled
+  softStep(voice, pitch = 1) {
+    const t = this.ctx.currentTime;
+    const scuff = this._noiseSource(t, 0.2);
+    const lp = this._filter('lowpass', 1400 * pitch);
+    const g = this._envelope(t, 0.01, 0.16, 0.55);
+    scuff.connect(lp).connect(g).connect(voice);
+    this._thud(voice, t, 140 * pitch, 0.6, 0.12);
+  }
+
+  // a bat swarm: wings beating (short bursts of air)
+  flutter(voice) {
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const t0 = t + i * 0.05;
+      const n = this._noiseSource(t0, 0.05);
+      const bp = this._filter('bandpass', 700 + Math.random() * 600, 1.2);
+      const g = this._envelope(t0, 0.004, 0.04, 0.5 + Math.random() * 0.3);
+      n.connect(bp).connect(g).connect(voice);
+    }
+  }
+
+  // a bat squeaks: very high and short, like a tiny voice
+  screech(voice) {
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
+      const f = 1500 + Math.random() * 500;
+      this._vocal(voice, t + i * 0.09, 0.07, f, f * 1.15, 'i', 0.25, { attack: 0.005 });
+    }
+  }
+
   // the demon: heavy stomp that shakes the floor
   stomp(voice, pitch = 1) {
     const ctx = this.ctx, t = ctx.currentTime;
@@ -407,6 +438,60 @@ export class SpookyAudio {
       g.gain.setValueAtTime(0, t0 + len);
       n.connect(bp).connect(g).connect(voice);
       t0 += len;
+    }
+  }
+
+  // ---- keys, doors and escaping ---------------------------------------------
+
+  // a key appears: a soft bell
+  keyAppear(voice) {
+    const t = this.ctx.currentTime;
+    this._bell(voice, 880, t, 0.22, 2);
+    this._bell(voice, 1318, t + 0.18, 0.14, 1.6);
+  }
+
+  // the waiting key chimes now and then, so it can be found by ear
+  keyChime(voice) {
+    this._bell(voice, 1760, this.ctx.currentTime, 0.08, 0.9);
+  }
+
+  // picking the key up: a little jingle
+  keyPickup() {
+    const t = this.ctx.currentTime;
+    [1046, 1318, 1568, 2093].forEach((f, i) => this._bell(this.master, f, t + i * 0.07, 0.1, 0.8));
+  }
+
+  // a door unlocks: a heavy lock clunks, then it creaks open
+  unlock(voice) {
+    const t = this.ctx.currentTime;
+    this._thud(voice, t, 400, 1.2, 0.12);
+    const n = this._noiseSource(t + 0.05, 0.1);
+    const bp = this._filter('bandpass', 2500, 4);
+    const g = this._envelope(t + 0.05, 0.002, 0.08, 0.8);
+    n.connect(bp).connect(g).connect(voice);
+    this._creak(voice, t + 0.35, 2.4, 0.4);
+  }
+
+  // walking down the stairs during the fade
+  stairsDown() {
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 6; i++) {
+      const t0 = t + i * 0.32;
+      const n = this._noiseSource(t0, 0.15);
+      const lp = this._filter('lowpass', 1800);
+      const g = this._envelope(t0, 0.005, 0.14, 0.7);
+      n.connect(lp).connect(g).connect(this.master);
+      this._thud(this.master, t0, 160, 1.1, 0.14);
+      if (i % 2) this._creak(this.master, t0 + 0.02, 0.35, 0.1);
+    }
+  }
+
+  // escaped! bells and a bright choir
+  win() {
+    const t = this.ctx.currentTime;
+    [523, 659, 784, 1046].forEach((f, i) => this._bell(this.master, f, t + i * 0.25, 0.25, 3));
+    for (const f of [262, 330, 392, 523]) {
+      this._vocal(this.master, t + 0.9, 3.2, f, f, 'a', 0.08, { vibrato: 5, depth: 2, attack: 0.8 });
     }
   }
 

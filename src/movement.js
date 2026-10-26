@@ -1,5 +1,4 @@
 import * as THREE from '../vendor/three.module.js';
-import { ROOM_HALF, OBSTACLES } from './room.js';
 
 // Moving the player around the room. The player is a "rig" (a group holding
 // the camera and the VR hands): moving the rig moves the player.
@@ -9,12 +8,20 @@ const UP = new THREE.Vector3(0, 1, 0);
 const _head = new THREE.Vector3();
 const clamp = THREE.MathUtils.clamp;
 
+// the area the player is in: its walls and the furniture to walk around
+let bounds = { minX: -6, maxX: 6, minZ: -6, maxZ: 6 };
+let obstacles = [];
+export function setArea(info) {
+  bounds = info.bounds;
+  obstacles = info.obstacles;
+}
+
 // pushes a floor position ({x, z}) back inside the room and out of the furniture
 export function resolveCollisions(p, r = BODY_RADIUS) {
-  const limit = ROOM_HALF - r - 0.05;
-  p.x = clamp(p.x, -limit, limit);
-  p.z = clamp(p.z, -limit, limit);
-  for (const [x0, x1, z0, z1] of OBSTACLES) {
+  const m = r + 0.05;
+  p.x = clamp(p.x, bounds.minX + m, bounds.maxX - m);
+  p.z = clamp(p.z, bounds.minZ + m, bounds.maxZ - m);
+  for (const [x0, x1, z0, z1] of obstacles) {
     const cx = clamp(p.x, x0, x1), cz = clamp(p.z, z0, z1);
     const dx = p.x - cx, dz = p.z - cz;
     const d = Math.hypot(dx, dz);

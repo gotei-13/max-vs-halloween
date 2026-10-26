@@ -3,7 +3,7 @@ import * as THREE from '../vendor/three.module.js';
 // The start / game-over menu inside the headset: a floating panel in the same
 // style as the laptop menu. Point a wand at a button and pull the trigger.
 
-const W = 1024, H = 800;          // canvas pixels
+const W = 1024, H = 960;          // canvas pixels
 const PANEL_W = 1.5;              // meters
 const LEVELS = [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']];
 const STYLES = [['realistic', 'Realistic'], ['outline', 'Glow outlines']];
@@ -74,7 +74,8 @@ export class VrMenu {
     this.time = 0;
     this.appear = 0;
     this.content = { title: '', subtitle: '', action: 'START' };
-    this.selection = { level: 'easy', levelNote: '', style: 'realistic', mixedReality: false };
+    // areas: [{ label, unlocked }] parts of the house to start in; start: the chosen one
+    this.selection = { level: 'easy', levelNote: '', style: 'realistic', mixedReality: false, areas: [], start: 0 };
     // redraw once the spooky title font has loaded
     document.fonts?.load(`80px ${TITLE_FONT}`).then(() => { if (this.visible) this._draw(); }).catch(() => {});
   }
@@ -153,7 +154,7 @@ export class VrMenu {
     return { point: hit.point, id: button?.id ?? null };
   }
 
-  _button(id, label, x, y, w, h, { selected = false, big = false } = {}) {
+  _button(id, label, x, y, w, h, { selected = false, big = false, small = false } = {}) {
     const ctx = this.ctx;
     const hovered = this.hover === id;
     this.buttons.push({ id, x, y, w, h });
@@ -174,7 +175,7 @@ export class VrMenu {
     ctx.strokeStyle = big ? '#ffd0a0' : selected ? '#d8ccff' : hovered ? '#b8a8ff' : '#4b3d8f';
     ctx.stroke();
     ctx.fillStyle = '#fff';
-    ctx.font = `${big ? 'bold 52px' : '36px'} system-ui, sans-serif`;
+    ctx.font = `${big ? 'bold 52px' : small ? '28px' : '36px'} system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, x + w / 2, y + h / 2 + 2);
@@ -238,12 +239,30 @@ export class VrMenu {
       });
     }
 
-    this._button('start', action, W / 2 - 280, 584, 560, 108, { big: true });
+    // where in the house to start: only the parts already reached
+    label('Start at', 572);
+    const n = sel.areas.length || 1;
+    const bw = (840 - (n - 1) * 14) / n;
+    sel.areas.forEach((a, i) => {
+      const x = 92 + i * (bw + 14);
+      if (a.unlocked) {
+        this._button(`area:${i}`, a.label, x, 594, bw, 70, { selected: sel.start === i, small: true });
+      } else {
+        roundRect(ctx, x, 594, bw, 70, 18);
+        ctx.fillStyle = 'rgba(27, 18, 56, 0.5)';
+        ctx.fill();
+        ctx.font = '26px system-ui, sans-serif';
+        ctx.fillStyle = '#5a5278';
+        ctx.fillText(`🔒 ${a.label}`, x + bw / 2, 631);
+      }
+    });
+
+    this._button('start', action, W / 2 - 280, 700, 560, 108, { big: true });
 
     ctx.font = '26px system-ui, sans-serif';
     ctx.fillStyle = '#8a82a8';
-    ctx.fillText('Point your wand at a button and pull the trigger', W / 2, 726);
-    ctx.fillText('In the game: left stick walks · right stick turns', W / 2, 760);
+    ctx.fillText('Point your wand at a button and pull the trigger', W / 2, 866);
+    ctx.fillText('In the game: left stick walks · right stick turns', W / 2, 900);
     this.texture.needsUpdate = true;
   }
 }

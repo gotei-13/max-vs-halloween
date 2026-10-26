@@ -1,5 +1,4 @@
 import * as THREE from '../vendor/three.module.js';
-import { ROOM_HALF, OBSTACLES } from './room.js';
 import { sparkle } from './textures.js';
 
 // Now and then a potion of visibility appears somewhere in the room, floating
@@ -40,6 +39,13 @@ export class Potion {
     scene.add(this.group);
 
     this.voice = null;
+    this.area = { bounds: { minX: -6, maxX: 6, minZ: -6, maxZ: 6 }, obstacles: [], circle: { x: 0, z: 0 } };
+    this.reset();
+  }
+
+  // the area of the house the player is in now
+  setArea(info) {
+    this.area = info;
     this.reset();
   }
 
@@ -133,12 +139,13 @@ export class Potion {
 
   // a free spot: not in furniture, not on the pentagram, not too close to the player
   _place(player) {
-    const limit = ROOM_HALF - 1;
+    const { bounds: b, obstacles, circle } = this.area;
+    const margin = Math.min(1, (b.maxX - b.minX) / 2 - 0.4);   // narrow hallways get a smaller margin
     for (let tries = 0; tries < 30; tries++) {
-      const x = rand(-limit, limit), z = rand(-limit, limit);
-      if (Math.hypot(x, z) < 1.8) continue;
+      const x = rand(b.minX + margin, b.maxX - margin), z = rand(b.minZ + 1, b.maxZ - 1);
+      if (Math.hypot(x - circle.x, z - circle.z) < 1.8) continue;
       if (Math.hypot(x - player.x, z - player.z) < 3) continue;
-      if (OBSTACLES.some(([x0, x1, z0, z1]) => x > x0 - 0.5 && x < x1 + 0.5 && z > z0 - 0.5 && z < z1 + 0.5)) continue;
+      if (obstacles.some(([x0, x1, z0, z1]) => x > x0 - 0.5 && x < x1 + 0.5 && z > z0 - 0.5 && z < z1 + 0.5)) continue;
       this.group.position.set(x, 0.9, z);
       return true;
     }

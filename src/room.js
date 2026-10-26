@@ -132,6 +132,9 @@ function pendulum() {
   ];
 }
 
+// The first area of the house. `info` describes it for the rest of the game
+// (walls, furniture, where the player starts, where the exit is); the other
+// areas (house.js) return the same shape.
 export function createRoom() {
   const group = new THREE.Group();
   const outline = buildOutline();
@@ -145,6 +148,22 @@ export function createRoom() {
 
   return {
     group,
+    info: {
+      id: 'bedroom',
+      name: 'The Bedroom',
+      bounds: { minX: -HX, maxX: HX, minZ: -HZ, maxZ: HZ },
+      obstacles: OBSTACLES,
+      circle: { x: 0, z: 0 },
+      entry: { x: 0, z: 3.5, yaw: 0 },
+      exitZone: { x: 1.7, z: -HZ + 0.6, r: 0.75 },
+      exitPoint: { x: 1.7, y: 1.1, z: -HZ + 0.1 },
+      keySpot: { x: 0, z: -2.5 },
+      horrorDoor: { x: 1.7, y: 1.1, z: -HZ + 0.1 },   // the door can creak open and slam (horror.js)
+    },
+    // open the way out (0 = shut, 1 = wide open)
+    setExit(k) {
+      doorAngle = k * 1.25;
+    },
     setStyle(style) {
       real.group.visible = style === 'realistic';
       outline.group.visible = style === 'outline';
@@ -196,13 +215,13 @@ const _e = new THREE.Euler();
 const _p = new THREE.Vector3();
 const _one = new THREE.Vector3(1, 1, 1);
 
-function placed(geo, x, y, z, rx = 0, ry = 0) {
+export function placed(geo, x, y, z, rx = 0, ry = 0) {
   const g = geo.index ? geo.toNonIndexed() : geo.clone();
   return g.applyMatrix4(_m4.compose(_p.set(x, y, z), _q.setFromEuler(_e.set(rx, ry, 0)), _one));
 }
 
 // box with texture coordinates in meters, so wood grain has the same scale everywhere
-function texturedBox(w, h, d) {
+export function texturedBox(w, h, d) {
   const geo = new THREE.BoxGeometry(w, h, d);
   const uv = geo.attributes.uv;
   const dims = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];  // +x -x +y -y +z -z
@@ -215,7 +234,7 @@ function texturedBox(w, h, d) {
   return geo;
 }
 
-function mergeGeometries(geos) {
+export function mergeGeometries(geos) {
   const out = new THREE.BufferGeometry();
   for (const name of ['position', 'normal', 'uv']) {
     if (!geos.every((g) => g.getAttribute(name))) continue;
@@ -234,20 +253,20 @@ function mergeGeometries(geos) {
 }
 
 // all outline boxes of a list as ONE line mesh (one draw call)
-function outlineMesh(list, mat) {
+export function outlineMesh(list, mat) {
   const geos = list.filter((b) => b.outline)
-    .map((b) => placed(new THREE.EdgesGeometry(new THREE.BoxGeometry(b.w, b.h, b.d)), b.x, b.y, b.z, b.rx || 0));
+    .map((b) => placed(new THREE.EdgesGeometry(new THREE.BoxGeometry(b.w, b.h, b.d)), b.x, b.y, b.z, b.rx || 0, b.ry || 0));
   return new THREE.LineSegments(mergeGeometries(geos), mat);
 }
 
 // boxes of a list merged by material: a handful of draw calls instead of dozens
-function solidMeshes(list, materials, extra = []) {
+export function solidMeshes(list, materials, extra = []) {
   const buckets = new Map();
   const add = (mat, geo) => {
     if (!buckets.has(mat)) buckets.set(mat, []);
     buckets.get(mat).push(geo);
   };
-  for (const b of list) add(materials[b.mat], placed(texturedBox(b.w, b.h, b.d), b.x, b.y, b.z, b.rx || 0));
+  for (const b of list) add(materials[b.mat], placed(texturedBox(b.w, b.h, b.d), b.x, b.y, b.z, b.rx || 0, b.ry || 0));
   for (const [mat, geo] of extra) add(mat, geo);
   const group = new THREE.Group();
   for (const [mat, geos] of buckets) group.add(new THREE.Mesh(mergeGeometries(geos), mat));
@@ -502,7 +521,7 @@ function buildBooks() {
 }
 
 // a spider web spanning a ceiling corner
-function cobweb(corner, alongA, alongB) {
+export function cobweb(corner, alongA, alongB) {
   const down = new THREE.Vector3(0, -1, 0);
   const ends = [];
   const L = 0.8;
@@ -526,7 +545,7 @@ function cobweb(corner, alongA, alongB) {
 }
 
 // glowing magic circle under the player (shown in realistic and mixed-reality)
-function buildMagicCircle() {
+export function buildMagicCircle() {
   const mat = new THREE.MeshBasicMaterial({
     map: tex.magicCircle(), color: 0x8a5cff, transparent: true, opacity: 0.6,
     blending: THREE.AdditiveBlending, depthWrite: false,

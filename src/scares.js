@@ -1,5 +1,4 @@
 import * as THREE from '../vendor/three.module.js';
-import { ROOM_HALF } from './room.js';
 
 // Atmosphere during a game: now and then a creepy grin, a pair of burning
 // eyes or an evil witch appears for a moment at the edge of your view (with a
@@ -145,6 +144,13 @@ export class Scares {
     this.textures = Object.fromEntries(FACES.map((k) => [k, faceTexture(k)]));
     this.geometry = new THREE.PlaneGeometry(0.8, 0.5);
     this.faces = [];
+    this.bounds = { minX: -6, maxX: 6, minZ: -6, maxZ: 6 };
+    this.reset();
+  }
+
+  // the area of the house the player is in now
+  setArea(info) {
+    this.bounds = info.bounds;
     this.reset();
   }
 
@@ -197,10 +203,10 @@ export class Scares {
     const dir = _v.set(Math.sin(angle), 0, -Math.cos(angle));
     // just in front of the wall in that direction, but not further than 3.5 m
     const toWall = Math.min(
-      dir.x ? (Math.sign(dir.x) * (ROOM_HALF - 0.35) - _head.x) / dir.x : Infinity,
-      dir.z ? (Math.sign(dir.z) * (ROOM_HALF - 0.35) - _head.z) / dir.z : Infinity,
+      dir.x ? ((dir.x > 0 ? this.bounds.maxX - 0.35 : this.bounds.minX + 0.35) - _head.x) / dir.x : Infinity,
+      dir.z ? ((dir.z > 0 ? this.bounds.maxZ - 0.35 : this.bounds.minZ + 0.35) - _head.z) / dir.z : Infinity,
     );
-    const dist = Math.max(1.5, Math.min(4.5, toWall));
+    const dist = Math.max(0.8, Math.min(4.5, toWall));
     const kind = FACES[Math.floor(Math.random() * FACES.length)];
     const mat = new THREE.MeshBasicMaterial({ map: this.textures[kind], transparent: true, opacity: 0, depthWrite: false });
     const mesh = new THREE.Mesh(this.geometry, mat);

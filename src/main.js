@@ -1,7 +1,9 @@
 import * as THREE from '../vendor/three.module.js';
 import { SpookyAudio } from './audio.js';
 import { createRoom } from './room.js';
-import { Ghost, GHOST_TYPES } from './ghost.js';
+import { createHallway, createStairwell, createFoyer } from './house.js';
+import { Ghost } from './ghost.js';
+import { Key } from './key.js';
 import { Hud } from './hud.js';
 import { Trail } from './trail.js';
 import { SpellFx } from './fx.js';
@@ -11,7 +13,8 @@ import { Scares } from './scares.js';
 import { Horror } from './horror.js';
 import { Potion } from './potion.js';
 import { makeWand } from './wand.js';
-import { walk, floorDirections, snapTurn } from './movement.js';
+import { sparkle } from './textures.js';
+import { walk, floorDirections, snapTurn, setArea as setWalkArea } from './movement.js';
 
 const EYE_HEIGHT = 1.6;
 const START_LIVES = 3;
@@ -35,6 +38,34 @@ const DIFFICULTIES = {
     note: 'Sound only · fast ghosts',
   },
 };
+// The haunted house, one area after another. In each area banish `goal` creatures
+// (first the ones in `plan`, then any of `types`); then a key appears (or, in the
+// last area, the boss comes) and the way to the next area opens.
+const AREAS = [
+  {
+    build: createRoom, label: 'Bedroom', goal: 5,
+    plan: ['walker', 'flyer', 'crawler', 'walker', 'flyer'], types: ['walker', 'flyer', 'crawler'],
+    intro: 'Escape the haunted house! Banish 5 ghosts to find the key to the door',
+  },
+  {
+    build: createHallway, label: 'Hallway', goal: 4,
+    plan: ['shadow', 'shadow', 'walker', 'shadow'], types: ['shadow', 'shadow', 'walker'],
+    intro: 'The Hallway: banish 4 creatures. Shadow people only move when you are NOT looking at them!',
+  },
+  {
+    build: createStairwell, label: 'Stairs', goal: 4,
+    plan: ['bats', 'bats', 'flyer', 'bats'], types: ['bats', 'bats', 'flyer', 'crawler'],
+    intro: 'The Staircase: chase away 4 bat swarms to clear the way down',
+  },
+  {
+    build: createFoyer, label: 'Front hall', goal: 3,
+    plan: ['walker', 'crawler', 'flyer'], types: ['walker', 'flyer', 'crawler', 'shadow'],
+    boss: { hp: 5 },
+    intro: 'The Entrance Hall: banish 3 ghosts… then face the guardian of the front door',
+  },
+];
+const FADE = 0.6;   // seconds to fade to black (and back) between areas
+
 const SPELL_SPEED = 10;
 const SPELL_STEER = 7;  // how fast a spell curves toward its ghost
 const RESTART_DELAY = 1.5;
@@ -61,16 +92,15 @@ scene.background = new THREE.Color(0x000000);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 100);
 camera.rotation.order = 'YXZ';
 
-// the player's "rig": moving it moves the player (camera and VR hands) through the room.
-// A game starts near the door, facing the pentagram.
-const START_POS = new THREE.Vector3(0, 0, 3.5);
+// the player's "rig": moving it moves the player (camera and VR hands) through the house.
+// Each area puts it at its entrance (loadArea); before a game it stands in the bedroom.
 const rig = new THREE.Group();
-rig.position.copy(START_POS);
+rig.position.set(0, 0, 3.5);
 rig.add(camera);
 scene.add(rig);
 
 const audio = new SpookyAudio();
-const room = createRoom();
+let room = createRoom();   // the area of the house the player is in (see loadArea)
 scene.add(room.group);
 const hud = new Hud(camera);
 const trail = new Trail(scene);
@@ -80,15 +110,55 @@ const shield = new Shield(scene);
 const scares = new Scares(scene, audio);
 const potion = new Potion(scene, audio);
 const horror = new Horror(scene, audio, room);
+const key = new Key(scene, audio);
+
+// a glowing golden ring on the floor, with sparkles rising from it, where the way out is
+const exitMarker = (() => {
+  const marker = new THREE.Group();
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd36b, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.58, 40), ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.03;
+  const count = 36;
+  const pos = new Float32Array(count * 3);
+  const speeds = new Float32Array(count);
+  const reset = (i, y) => {
+    const a = Math.random() * Math.PI * 2;
+    const r = 0.3 + Math.random() * 0.25;
+    pos.set([Math.cos(a) * r, y, Math.sin(a) * r], i * 3);
+    speeds[i] = 0.3 + Math.random() * 0.5;
+  };
+  for (let i = 0; i < count; i++) reset(i, Math.random() * 1.8);
+  const geo = new THREE.BufferGeometry();
+  const attr = new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('position', attr);
+  const sparkMat = new THREE.PointsMaterial({ map: sparkle(), color: 0xffd36b, size: 0.07, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+  const sparks = new THREE.Points(geo, sparkMat);
+  sparks.frustumCulled = false;
+  marker.add(ring, sparks);
+  marker.userData = {
+    ringMat,
+    update(dt) {
+      for (let i = 0; i < count; i++) {
+        pos[i * 3 + 1] += speeds[i] * dt;
+        if (pos[i * 3 + 1] > 1.9) reset(i, 0);
+      }
+      attr.needsUpdate = true;
+    },
+  };
+  marker.visible = false;
+  scene.add(marker);
+  return marker;
+})();
 
 // shown the first time each kind of ghost appears in a game
 const GHOST_INTROS = {
   flyer: 'Something is flying above you… look up!',
   crawler: 'Something is knocking under the floor… look down!',
-  demon: 'A RED DEMON is coming! 3 hits to banish it, it takes 2 lives!',
+  demon: 'THE GUARDIAN! A red demon: 5 hits to banish it, it takes 2 lives!',
+  shadow: 'A shadow person! It only moves when you are NOT looking. Turn to its soft steps to freeze it',
+  bats: 'Bats! Listen for the fluttering wings above and below you',
 };
-const DEMON_CHANCE = 0.25;   // once the player has banished DEMON_FROM ghosts
-const DEMON_FROM = 2;
 
 // ---- VR controllers -------------------------------------------------------
 
@@ -146,8 +216,19 @@ let overAt = 0;
 let ghosts = [];
 let spells = [];
 let spawnTimes = [];
-let ghostCount = 0;
 const seenTypes = new Set();
+let areaIndex = 0;      // which area of the house
+let phase = 'fight';    // 'fight' -> 'key' -> 'exit' (or 'fight' -> 'boss' -> 'exit' in the last area)
+let goalDone = 0;       // creatures banished in this area
+let areaSpawns = 0;     // creatures sent in this area
+let exitOpen = 0;       // 0..1 how far the way out has opened
+let transition = null;  // { t, target, swapped } while fading between areas
+let playStart = 0;
+let progress = 0;       // the furthest area reached (saved)
+let startArea = 0;      // where the next game starts
+try { progress = Math.min(AREAS.length - 1, Number(localStorage.getItem('maxiween-progress')) || 0); } catch {}
+startArea = progress;
+const lookDir = new THREE.Vector3();
 let level = 'easy';
 let cfg = DIFFICULTIES.easy;
 let restartOnContinue = false;
@@ -174,9 +255,163 @@ function clearWorld() {
   potion.reset();
   horror.reset();
   audio.stopDread();
+  key.hide();
+  exitMarker.visible = false;
   ghosts = [];
   spells = [];
   spawnTimes = [];
+}
+
+// throw away an area's meshes, materials and textures (frees memory on the Quest)
+function disposeGroup(group) {
+  group.traverse((o) => {
+    o.geometry?.dispose();
+    for (const mat of [].concat(o.material || [])) {
+      for (const value of Object.values(mat)) if (value?.isTexture) value.dispose();
+      mat.dispose();
+    }
+  });
+}
+
+// build an area of the house and put the player at its entrance
+function loadArea(index) {
+  scene.remove(room.group);
+  disposeGroup(room.group);
+  areaIndex = index;
+  room = AREAS[index].build();
+  scene.add(room.group);
+  applyRoomStyle();
+  const info = room.info;
+  setWalkArea(info);
+  shield.setCenter(info.circle.x, info.circle.z);
+  potion.setArea(info);
+  scares.setArea(info);
+  horror.allowDoor = true;
+  horror.setArea(room);
+  rig.position.set(info.entry.x, 0, info.entry.z);
+  rig.rotation.set(0, mode === 'vr' ? info.entry.yaw : 0, 0);
+  rig.updateMatrixWorld(true);
+  yaw = info.entry.yaw;
+  pitch = 0;
+}
+
+// start (or restart) an area: full lives, its creatures come
+function beginArea(index) {
+  clearWorld();
+  loadArea(index);
+  shield.reset();
+  lives = START_LIVES;
+  phase = 'fight';
+  goalDone = 0;
+  areaSpawns = 0;
+  exitOpen = 0;
+  state = 'playing';
+  vrMenu.hide();
+  hud.setMessage();
+  hud.toast(AREAS[index].intro, 4.5);
+  scheduleSpawn(3);
+  if (index > progress) {
+    progress = index;
+    try { localStorage.setItem('maxiween-progress', String(progress)); } catch {}
+  }
+  updateAreaChoice();
+}
+
+// the area's ghosts are banished: a key appears, or the boss comes, or (stairs) the way opens
+function onGoalReached() {
+  for (const g of ghosts) if (g.alive) g.vanish();
+  spawnTimes = [];
+  const a = AREAS[areaIndex];
+  const info = room.info;
+  if (a.boss) {
+    phase = 'boss';
+    hud.toast('The house shakes… something huge is coming through the front door!', 3);
+    setTimeout(() => { if (phase === 'boss' && state === 'playing') spawnBoss(); }, 3000);
+  } else if (info.noKey) {
+    openExit('The way down is clear! Walk to the top of the stairs');
+  } else {
+    phase = 'key';
+    key.show(info.keySpot.x, info.keySpot.z);
+    hud.toast('A key appeared! Listen for its chime and walk over it', 3);
+  }
+}
+
+// the way to the next area opens
+function openExit(message) {
+  phase = 'exit';
+  horror.allowDoor = false;
+  horror.reset();
+  const info = room.info;
+  audio.at(info.exitPoint, (voice) => audio.unlock(voice));
+  exitMarker.position.set(info.exitZone.x, 0, info.exitZone.z);
+  exitMarker.visible = true;
+  hud.toast(message, 3.5);
+}
+
+// the player walks through the open exit: fade to black and on to the next area
+function goToNextArea() {
+  if (areaIndex === AREAS.length - 1) {
+    escape();
+    return;
+  }
+  state = 'transition';
+  if (room.info.id === 'stairwell') audio.stairsDown();
+  transition = { t: 0, target: areaIndex + 1, swapped: false };
+}
+
+function updateTransition(dt) {
+  if (!transition) return;
+  transition.t += dt;
+  const t = transition.t;
+  hud.setFade(t < FADE ? t / FADE : Math.max(0, 1 - (t - FADE - 0.3) / FADE));
+  if (t >= FADE && !transition.swapped) {
+    transition.swapped = true;
+    if (transition.escape) {
+      // the view out of the front door, with celebration sparkles
+      rig.position.set(0, 0, -1.6);
+      rig.rotation.set(0, 0, 0);
+      rig.updateMatrixWorld(true);
+      yaw = 0;
+      pitch = 0.05;
+      for (let i = 0; i < 4; i++) setTimeout(() => fx.hit(_v3.set((Math.random() - 0.5) * 1.5, 1.6 + Math.random() * 0.6, -4.4), false), 300 + i * 450);
+    } else {
+      beginArea(transition.target);
+      state = 'transition';
+    }
+  }
+  if (t >= FADE * 2 + 0.3) {
+    const escaped = transition.escape;
+    transition = null;
+    hud.setFade(0);
+    if (!escaped) state = 'playing';
+  }
+}
+
+// out of the front door: the end! Fade to black, then stand in the hall
+// looking out through the open front door at the moonlit night
+function escape() {
+  state = 'escaped';
+  overAt = now;
+  exitMarker.visible = false;
+  audio.stopDread();
+  audio.win();
+  transition = { t: 0, escape: true, swapped: false };
+  const seconds = Math.round(now - playStart);
+  const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  const line = `You banished ${score} creatures in ${time}`;
+  if (mode === 'vr') {
+    setTimeout(() => vrMenu.show({ title: 'YOU ESCAPED!', subtitle: line, action: 'PLAY AGAIN' }, camera), 2500);
+  } else {
+    hud.setMessage('YOU ESCAPED!', `${line}\nClick to play again`);
+  }
+}
+
+// the red demon guards the front door
+function spawnBoss() {
+  audio.stinger();
+  const from = room.info.bossFrom;
+  const angle = Math.atan2(from.x - player.x, -(from.z - player.z));
+  spawnGhost('demon', { angle, hp: AREAS[areaIndex].boss.hp, boss: true });
 }
 
 function showReady() {
@@ -185,7 +420,7 @@ function showReady() {
   state = 'ready';
   if (mode === 'vr') {
     hud.setMessage();
-    vrMenu.show({ title: 'Maxim VS Halloween', subtitle: 'Listen for the ghosts… and banish them!', action: 'START' }, camera);
+    vrMenu.show({ title: 'Maxim VS Halloween', subtitle: 'Escape the haunted house!', action: 'START' }, camera);
   } else {
     hud.setMessage('Maxim VS Halloween', 'Click to start');
   }
@@ -197,35 +432,23 @@ function tryStart() {
     startGame();
     return true;
   }
-  if (state === 'over') {
-    if (now - overAt > RESTART_DELAY) startGame();
+  if (state === 'over' || state === 'escaped') {
+    if (now - overAt > RESTART_DELAY) {
+      if (state === 'over') beginArea(areaIndex);   // checkpoint: try this area again
+      else startGame(0);
+    }
     return true;
   }
   return false;
 }
 
-function resetPlayer() {
-  rig.position.copy(START_POS);
-  rig.rotation.set(0, 0, 0);
-  rig.updateMatrixWorld(true);
-  yaw = 0;
-  pitch = 0;
-}
-
-function startGame() {
-  clearWorld();
-  resetPlayer();
-  shield.reset();
-  lives = START_LIVES;
+// a new run through the house, from the chosen area
+function startGame(from = startArea) {
   score = 0;
-  ghostCount = 0;
   seenTypes.clear();
-  state = 'playing';
-  vrMenu.hide();
-  hud.setMessage();
-  hud.toast('Listen! Tip: stand in the pentagram for 10 s of protection', 3.5);
+  playStart = now;
   audio.start();
-  scheduleSpawn(2.2);
+  beginArea(from);
 }
 
 function gameOver() {
@@ -237,9 +460,11 @@ function gameOver() {
   potion.reset();
   horror.reset();
   audio.gameOver();
-  const banished = `You banished ${score} ghost${score === 1 ? '' : 's'}`;
-  // in VR the menu panel with "Play again" follows shortly (see updateGame)
-  hud.setMessage('GAME OVER', mode === 'vr' ? banished : `${banished}\nClick to play again`);
+  key.hide();
+  exitMarker.visible = false;
+  const where = `The ${AREAS[areaIndex].label.toLowerCase()} got you…`;
+  // in VR the menu panel with "Try again" follows shortly (see updateGame)
+  hud.setMessage('GAME OVER', mode === 'vr' ? where : `${where}\nClick to try this part again`);
 }
 
 function scheduleSpawn(delay) {
@@ -251,24 +476,30 @@ function playerYaw() {
   return Math.atan2(_v1.x, -_v1.z);
 }
 
-// first a walker, then a flyer, then a crawler, then any kind
-function nextGhostType() {
-  if (ghostCount < GHOST_TYPES.length) return GHOST_TYPES[ghostCount];
-  return GHOST_TYPES[Math.floor(Math.random() * GHOST_TYPES.length)];
+// the area's creatures: first its plan, then any of its kinds
+function nextAreaType() {
+  const a = AREAS[areaIndex];
+  const type = areaSpawns < a.plan.length ? a.plan[areaSpawns] : a.types[Math.floor(Math.random() * a.types.length)];
+  areaSpawns++;
+  return type;
 }
 
-function spawnGhost() {
-  // now and then, once the player is warmed up, the red demon comes instead
-  const demonAround = huntingGhosts().some((g) => g.type === 'demon');
-  const type = score >= DEMON_FROM && !demonAround && Math.random() < DEMON_CHANCE ? 'demon' : nextGhostType();
-  if (type === 'demon') audio.stinger();
-  else ghostCount++;
-  let angle;
-  if (!seenTypes.has(type)) {
+const SPEEDS = { demon: 1.15, shadow: 1.35, bats: 1.1 };
+
+function spawnGhost(type = nextAreaType(), { angle: fixedAngle, hp, boss = false } = {}) {
+  let angle = fixedAngle;
+  const spawnAngles = room.info.spawnAngles;
+  if (angle !== undefined) {
+    seenTypes.add(type);
+    if (GHOST_INTROS[type]) hud.toast(GHOST_INTROS[type], 3);
+  } else if (!seenTypes.has(type)) {
     // the first ghost of each kind comes from roughly in front, so it is easy to learn
     angle = playerYaw() + (Math.random() - 0.5) * 1.0;
     seenTypes.add(type);
     if (GHOST_INTROS[type]) hud.toast(GHOST_INTROS[type], 3);
+  } else if (spawnAngles) {
+    // narrow areas: come down the corridor, ahead or behind
+    angle = spawnAngles[Math.floor(Math.random() * spawnAngles.length)] + (Math.random() - 0.5) * 0.5;
   } else {
     // pick a direction away from the other ghosts so they can be told apart
     const others = huntingGhosts().map((g) => Math.atan2(g.pos.x, -g.pos.z));
@@ -282,10 +513,13 @@ function spawnGhost() {
   let elevation = 0;
   if (type === 'flyer') elevation = THREE.MathUtils.randFloat(0.6, 1.2);
   else if (type === 'crawler') elevation = -THREE.MathUtils.randFloat(0.6, 1.1);
-  const speed = ghostSpeed() * (type === 'demon' ? 1.15 : 1);
-  ghosts.push(new Ghost(scene, audio, {
-    type, angle, elevation, speed, pitch: 0.85 + Math.random() * 0.3, head: player,
-  }));
+  else if (type === 'bats') elevation = THREE.MathUtils.randFloat(0.5, 1.0) * (Math.random() < 0.5 ? -1 : 1);   // up the stairwell or up from the stairs
+  const speed = ghostSpeed() * (SPEEDS[type] || 1);
+  const ghost = new Ghost(scene, audio, {
+    type, angle, elevation, speed, pitch: 0.85 + Math.random() * 0.3, head: player, hp,
+  });
+  ghost.isBoss = boss;
+  ghosts.push(ghost);
 }
 
 // ---- casting spells -------------------------------------------------------
@@ -367,19 +601,28 @@ function onHit(ghost, controller) {
     // the demon needs more than one hit
     ghost.hurt(player);
     room.flash(0.8);
-    hud.toast(`The demon is hurt! ${ghost.hp} more hit${ghost.hp === 1 ? '' : 's'}!`, 1.8);
+    hud.toast(`The ${ghost.isBoss ? 'guardian' : 'demon'} is hurt! ${ghost.hp} more hit${ghost.hp === 1 ? '' : 's'}!`, 1.8);
     if (controller) pulse(controller, 0.9, 150);
     return;
   }
   ghost.banish();
   room.flash(1);
   score++;
-  hud.toast('Ghost banished!', 1.2);
   if (controller) pulse(controller, 0.7, 120);
+  if (ghost.isBoss) {
+    room.setExit(0);
+    openExit('You beat the guardian! The front door is opening… ESCAPE!');
+    return;
+  }
+  if (phase !== 'fight') return;
+  goalDone++;
+  const need = AREAS[areaIndex].goal;
+  if (goalDone >= need) onGoalReached();
+  else hud.toast(`Banished! ${goalDone} of ${need}`, 1.4);
 }
 
 function onMiss() {
-  if (state !== 'playing') return;
+  if (state !== 'playing' || phase !== 'fight') return;
   const hunting = huntingGhosts();
   if (hunting[0]) audio.laugh(hunting[0].body, hunting[0].pitch);
   if (hunting.length + spawnTimes.length < cfg.maxGhosts) {
@@ -416,12 +659,25 @@ function onGhostStep(ghost, dist) {
 }
 
 function updateGame(dt) {
-  if (state === 'playing') {
+  if (state === 'playing' && phase === 'fight') {
     const due = spawnTimes.filter((t) => t <= now);
     spawnTimes = spawnTimes.filter((t) => t > now);
     for (let i = 0; i < due.length; i++) spawnGhost();
     if (huntingGhosts().length === 0 && spawnTimes.length === 0) scheduleSpawn(1.6);
   }
+  if (state === 'playing' && phase === 'key' && key.update(dt, player) === 'picked') {
+    openExit(room.info.id === 'bedroom' ? 'The door unlocked! Walk through it' : 'The door at the end unlocked! Walk through it');
+  }
+  // the way out swings open, glows, and leads on when you step into it
+  if (phase === 'exit') {
+    exitOpen = Math.min(1, exitOpen + dt / 2.5);
+    room.setExit(exitOpen);
+    const z = room.info.exitZone;
+    exitMarker.userData.ringMat.opacity = 0.5 + 0.4 * (0.5 + 0.5 * Math.sin(now * 4));
+    exitMarker.userData.update(dt);
+    if (state === 'playing' && exitOpen > 0.6 && Math.hypot(player.x - z.x, player.z - z.z) < z.r) goToNextArea();
+  }
+  camera.getWorldDirection(lookDir);
 
   updateShield(dt);
   updatePotion(dt);
@@ -445,7 +701,7 @@ function updateGame(dt) {
         g.glitchTimer = THREE.MathUtils.randFloat(...cfg.glitch);
       }
     }
-    const ev = g.update(dt, player, shield.barrier, potion.visionActive);
+    const ev = g.update(dt, player, shield.barrier, potion.visionActive, lookDir);
     if (g.justBlocked) {
       // the ghost bumped into the pentagram's dome
       g.justBlocked = false;
@@ -465,8 +721,8 @@ function updateGame(dt) {
     hud.setMessage();
     vrMenu.show({
       title: 'GAME OVER',
-      subtitle: `You banished ${score} ghost${score === 1 ? '' : 's'}!`,
-      action: 'PLAY AGAIN',
+      subtitle: `The ${AREAS[areaIndex].label.toLowerCase()} got you… try this part again`,
+      action: 'TRY AGAIN',
     }, camera);
   }
 
@@ -475,6 +731,7 @@ function updateGame(dt) {
     lives, maxLives: START_LIVES, score,
     shield: state === 'playing' ? { state: shield.state, seconds: shield.secondsLeft, progress: shield.progress } : null,
     vision: potion.visionActive ? potion.secondsLeft : 0,
+    goal: state === 'playing' && phase === 'fight' ? { done: goalDone, need: AREAS[areaIndex].goal } : null,
   });
 }
 
@@ -541,7 +798,7 @@ function updateVrColors() {
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 function updateLocomotion(dt) {
-  if (paused || state !== 'playing') return;
+  if (paused || state !== 'playing') return;   // (not while fading between areas)
   let ahead = 0, side = 0;
   if (mode === 'laptop') {
     ahead = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
@@ -595,7 +852,11 @@ function onMenuPick(id) {
   const [kind, value] = id.split(':');
   if (kind === 'level') setLevel(value);
   else if (kind === 'style') setRoomStyle(value);
-  else if (kind === 'start') startGame();
+  else if (kind === 'area') setStartArea(Number(value));
+  else if (kind === 'start') {
+    if (state === 'over') beginArea(areaIndex);   // TRY AGAIN: this part of the house
+    else startGame(state === 'escaped' ? 0 : startArea);
+  }
 }
 
 // laptop: the mouse stands in for turning your head
@@ -673,6 +934,28 @@ function setLevel(name, remember = true) {
 }
 
 for (const b of levelButtons) b.addEventListener('click', () => setLevel(b.dataset.level));
+
+// where in the house the next game starts: any part already reached
+const areaBox = document.getElementById('areas');
+function setStartArea(index) {
+  if (index > progress) return;
+  if (index !== startArea && mode === 'laptop') restartOnContinue = true;
+  startArea = index;
+  updateAreaChoice();
+}
+function updateAreaChoice() {
+  areaBox.innerHTML = '';
+  AREAS.forEach((a, i) => {
+    const button = document.createElement('button');
+    button.textContent = i <= progress ? a.label : `🔒 ${a.label}`;
+    button.disabled = i > progress;
+    button.classList.toggle('selected', i === startArea);
+    button.addEventListener('click', () => setStartArea(i));
+    areaBox.appendChild(button);
+  });
+  vrMenu.setSelection({ areas: AREAS.map((a, i) => ({ label: a.label, unlocked: i <= progress })), start: startArea });
+}
+updateAreaChoice();
 let savedLevel = 'easy';
 try { savedLevel = localStorage.getItem('maxiween-level') || 'easy'; } catch {}
 setLevel(savedLevel, false);
@@ -811,7 +1094,7 @@ function updateWandTips(dt) {
   for (const c of controllers) c.userData.wand.userData.ray.visible = vrMenu.visible;
 
   // the laptop wand flicks up and forward when casting
-  laptopWand.visible = mode === 'laptop' && state === 'playing';
+  laptopWand.visible = mode === 'laptop' && (state === 'playing' || state === 'transition');
   wandKick = Math.max(0, wandKick - dt * 4);
   laptopWand.quaternion.copy(laptopWandRest);
   laptopWand.rotateX(Math.sin(wandKick * Math.PI) * 0.45);
@@ -820,8 +1103,17 @@ function updateWandTips(dt) {
 
 // open with ?debug to inspect performance from the browser console (debug.renderer.info)
 if (new URLSearchParams(location.search).has('debug')) window.debug = {
-  renderer, scene, camera, vrMenu, rig, shield, scares, potion, horror,
-  info: () => ({ lives, score, state, dread: Boolean(audio.dread) }),
+  renderer, scene, camera, vrMenu, rig, shield, scares, potion, horror, key,
+  room: () => room,
+  info: () => ({ lives, score, state, dread: Boolean(audio.dread), area: room.info.id, phase, goalDone, progress }),
+  // jump to a part of the house: debug.goto(1)
+  goto: (index) => beginArea(index),
+  reachGoal: () => { goalDone = AREAS[areaIndex].goal; onGoalReached(); },
+  moveTo: (x, z) => { rig.position.set(x, 0, z); rig.updateMatrixWorld(true); },
+  hitAll: () => ghosts.filter((g) => g.alive).forEach((g) => onHit(g)),
+  ghosts: () => ghosts.map((g) => ({ type: g.type, hp: g.hp, x: +g.pos.x.toFixed(2), z: +g.pos.z.toFixed(2), frozen: g.frozen, boss: Boolean(g.isBoss) })),
+  spawn: (type) => spawnGhost(type),
+  look: (yawValue) => { yaw = yawValue; },
   glitchAll: () => ghosts.forEach((g) => g.glitch()),
   // try the demon right away: debug.spawnDemon()
   spawnDemon: () => { audio.stinger(); ghosts.push(new Ghost(scene, audio, { type: 'demon', angle: playerYaw(), speed: 0.5, pitch: 1, head: player })); },
@@ -863,6 +1155,7 @@ renderer.setAnimationLoop(() => {
 
   if (!paused) {
     now += dt;
+    updateTransition(dt);
     updateGame(dt);
   }
   room.update(dt);

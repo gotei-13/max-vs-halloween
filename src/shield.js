@@ -78,6 +78,12 @@ export class Shield {
     this.moteSpeed[i] = 0.3 + Math.random() * 0.6;
   }
 
+  // move the pentagram (each area has it in a different spot)
+  setCenter(x, z) {
+    this.center.set(x, 0, z);
+    this.dome.position.copy(this.center);
+  }
+
   get active() {
     return this.state === 'active';
   }

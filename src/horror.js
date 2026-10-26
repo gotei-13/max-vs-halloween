@@ -1,5 +1,4 @@
 import * as THREE from '../vendor/three.module.js';
-import { ROOM_HALF } from './room.js';
 
 // Bigger horror moments during a game, one at a time, every 20-35 seconds:
 //   blackout - the candle and fire sputter, the room goes almost black for a few seconds
@@ -10,7 +9,6 @@ import { ROOM_HALF } from './room.js';
 
 const EVENTS = ['blackout', 'shadow', 'writing', 'behind', 'door'];
 const WORDS = ['GET OUT', 'BEHIND YOU', 'I SEE YOU', 'MAXIM...', 'HELP ME', 'RUN'];
-const DOOR = new THREE.Vector3(1.7, 1.1, -ROOM_HALF + 0.1);
 
 const _head = new THREE.Vector3();
 const _dir = new THREE.Vector3();
@@ -92,13 +90,21 @@ export class Horror {
   constructor(scene, audio, room) {
     this.scene = scene;
     this.audio = audio;
-    this.room = room;
     this.intensity = 1;   // more than 1: scary moments come more often
+    this.allowDoor = true; // false once the bedroom door is the way out
     this.shadowMat = new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, opacity: 0, depthWrite: false });
     this.shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 2.1), this.shadowMat);
     this.shadow.visible = false;
     scene.add(this.shadow);
     this.writing = null;
+    this.setArea(room);
+  }
+
+  // the area of the house the player is in now (its walls, and a door that can slam)
+  setArea(room) {
+    this.room = room;
+    this.bounds = room.info.bounds;
+    this.door = room.info.horrorDoor ? new THREE.Vector3().copy(room.info.horrorDoor) : null;
     this.reset();
   }
 
@@ -108,7 +114,7 @@ export class Horror {
     this.shadow.visible = false;
     this._removeWriting();
     this.room.setDarkness(0);
-    this.room.setDoor(0);
+    if (this.door && this.allowDoor) this.room.setDoor(0);
   }
 
   update(dt, camera, playing) {
@@ -119,7 +125,8 @@ export class Horror {
       this.timer -= dt * this.intensity;
       if (this.timer <= 0) {
         this.timer = 20 + Math.random() * 15;
-        this.event = { type: EVENTS[Math.floor(Math.random() * EVENTS.length)], t: 0, started: false };
+        const events = EVENTS.filter((name) => name !== 'door' || (this.door && this.allowDoor));
+        this.event = { type: events[Math.floor(Math.random() * events.length)], t: 0, started: false };
       }
     }
     if (!playing && this.event) this.reset();
@@ -187,17 +194,27 @@ export class Horror {
       camera.getWorldDirection(_dir);
       // on the wall roughly where the player is looking
       const angle = Math.atan2(_dir.x, -_dir.z) + (Math.random() - 0.5) * 0.9;
-      const dist = this._toWall(_head, angle, 100);
-      const x = _head.x + Math.sin(angle) * dist, z = _head.z - Math.cos(angle) * dist;
+      const hit = this._wallHit(_head, angle);
+      const x = _head.x + Math.sin(angle) * hit.dist, z = _head.z - Math.cos(angle) * hit.dist;
       const mat = new THREE.MeshBasicMaterial({
         map: writingTexture(WORDS[Math.floor(Math.random() * WORDS.length)]), transparent: true, opacity: 0, depthWrite: false,
       });
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3.8, 1.19), mat);
-      // stick it flat on whichever wall was hit, facing into the room
-      const onX = Math.abs(Math.abs(x) - ROOM_HALF) < Math.abs(Math.abs(z) - ROOM_HALF);
-      if (onX) mesh.position.set(Math.sign(x) * (ROOM_HALF - 0.07), 1.7, THREE.MathUtils.clamp(z, -ROOM_HALF + 2, ROOM_HALF - 2));
-      else mesh.position.set(THREE.MathUtils.clamp(x, -ROOM_HALF + 2, ROOM_HALF - 2), 1.7, Math.sign(z) * (ROOM_HALF - 0.07));
-      mesh.rotation.y = onX ? -Math.sign(x) * Math.PI / 2 : (z > 0 ? Math.PI : 0);
+      // as wide as fits on that wall (narrow at the ends of the hallway)
+      const b = this.bounds;
+      const wallLength = hit.wall === 'x' ? b.maxZ - b.minZ : b.maxX - b.minX;
+      const width = Math.min(3.8, wallLength - 0.4);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(width, width * 0.313), mat);
+      // stick it flat on the wall that was hit, facing into the room
+      const half = width / 2 + 0.1;
+      if (hit.wall === 'x') {
+        const wx = x > (b.minX + b.maxX) / 2 ? b.maxX - 0.07 : b.minX + 0.07;
+        mesh.position.set(wx, 1.7, THREE.MathUtils.clamp(z, b.minZ + half, b.maxZ - half));
+        mesh.rotation.y = wx > 0 ? -Math.PI / 2 : Math.PI / 2;
+      } else {
+        const wz = z > (b.minZ + b.maxZ) / 2 ? b.maxZ - 0.07 : b.minZ + 0.07;
+        mesh.position.set(THREE.MathUtils.clamp(x, b.minX + half, b.maxX - half), 1.7, wz);
+        mesh.rotation.y = wz > 0 ? Math.PI : 0;
+      }
       this.scene.add(mesh);
       this.writing = { mesh, mat };
       this.audio.at(mesh.position, (voice) => this.audio.whisper(voice));
@@ -220,7 +237,7 @@ export class Horror {
   _door(e) {
     if (!e.started) {
       e.started = true;
-      this.audio.at(DOOR, (voice) => this.audio.doorCreak(voice));
+      this.audio.at(this.door, (voice) => this.audio.doorCreak(voice));
     }
     const t = e.t;
     if (t < 3) this.room.setDoor(1.1 * (t / 3) * (t / 3));   // slowly creaks open
@@ -228,7 +245,7 @@ export class Horror {
     else if (t < 5.65) this.room.setDoor(1.1 * (1 - (t - 5.5) / 0.15));
     else {
       this.room.setDoor(0);
-      this.audio.at(DOOR, (voice) => this.audio.slam(voice));
+      this.audio.at(this.door, (voice) => this.audio.slam(voice));
       this.room.flash(0.4);
       this._end();
     }
@@ -238,13 +255,17 @@ export class Horror {
 
   // distance from p along a floor angle until a wall (at most max)
   _toWall(p, angle, max) {
+    return Math.min(max, this._wallHit(p, angle).dist);
+  }
+
+  // where a line from p along a floor angle meets the walls: distance, and
+  // whether it hits a wall across x (left/right) or across z (front/back)
+  _wallHit(p, angle) {
+    const b = this.bounds;
     const dx = Math.sin(angle), dz = -Math.cos(angle);
-    const lim = ROOM_HALF - 0.05;
-    return Math.min(
-      max,
-      dx ? (Math.sign(dx) * lim - p.x) / dx : Infinity,
-      dz ? (Math.sign(dz) * lim - p.z) / dz : Infinity,
-    );
+    const tx = dx ? ((dx > 0 ? b.maxX - 0.05 : b.minX + 0.05) - p.x) / dx : Infinity;
+    const tz = dz ? ((dz > 0 ? b.maxZ - 0.05 : b.minZ + 0.05) - p.z) / dz : Infinity;
+    return tx < tz ? { dist: tx, wall: 'x' } : { dist: tz, wall: 'z' };
   }
 
   _removeWriting() {

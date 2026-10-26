@@ -155,6 +155,14 @@ export class Hud {
     this.flashMesh.visible = false;
     this.root.add(this.flashMesh);
 
+    // black fade between the areas of the house (in front of everything else)
+    this.fadeMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthTest: false, depthWrite: false });
+    this.fadeMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.fadeMat);
+    this.fadeMesh.position.z = -0.12;
+    this.fadeMesh.renderOrder = 1001;
+    this.fadeMesh.visible = false;
+    this.root.add(this.fadeMesh);
+
     this.crosshair = new THREE.Mesh(
       new THREE.RingGeometry(0.006, 0.01, 24),
       new THREE.MeshBasicMaterial({ color: 0xb69cff, transparent: true, opacity: 0.7, depthTest: false, depthWrite: false }),
@@ -172,10 +180,11 @@ export class Hud {
 
   // lives as pumpkins, the pentagram's state, the potion's sight, and the score.
   // shield: { state, seconds, progress } or null; vision: seconds of potion sight left (0 = none)
-  setStatus({ lives, maxLives, score, shield = null, vision = 0 }) {
+  // goal: { done, need } while an area's ghosts are still to be banished (shown instead of the score)
+  setStatus({ lives, maxLives, score, shield = null, vision = 0, goal = null }) {
     const p = this.status;
     const ring = shield?.state === 'charging' ? Math.floor(shield.progress * 20) : 0;
-    const key = `${lives}/${maxLives}/${score}/${shield?.state}/${shield?.seconds}/${ring}/${vision}`;
+    const key = `${lives}/${maxLives}/${score}/${shield?.state}/${shield?.seconds}/${ring}/${vision}/${goal?.done}/${goal?.need}`;
     if (p.key === key) return;
     p.key = key;
     const { ctx, canvas } = p;
@@ -196,10 +205,10 @@ export class Hud {
       ctx.fillStyle = '#3dff9a';
       ctx.fillText(`${vision}`, 520, 68);
     }
-    drawGhost(ctx, 650, 62, 32);
-    ctx.font = `60px ${NUMBER_FONT}`;
-    ctx.fillStyle = '#e8fff8';
-    ctx.fillText(`${score}`, 690, 70);
+    drawGhost(ctx, 640, 62, 32);
+    ctx.font = `${goal ? 50 : 60}px ${NUMBER_FONT}`;
+    ctx.fillStyle = goal ? '#ffd36b' : '#e8fff8';
+    ctx.fillText(goal ? `${goal.done}/${goal.need}` : `${score}`, 678, 70);
     p.texture.needsUpdate = true;
   }
 
@@ -217,6 +226,12 @@ export class Hud {
   flash(color = 0xff0000, strength = 0.65) {
     this.flashMat.color.set(color);
     this.flashMat.opacity = strength;
+  }
+
+  // 0 = clear, 1 = black
+  setFade(k) {
+    this.fadeMat.opacity = k;
+    this.fadeMesh.visible = k > 0.001;
   }
 
   setVisible(visible) {

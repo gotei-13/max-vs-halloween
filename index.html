@@ -117,6 +117,9 @@
   .seg { display: grid; gap: 10px; }
   .seg.three { grid-template-columns: repeat(3, 1fr); }
   .seg.two { grid-template-columns: repeat(2, 1fr); }
+  .seg.four { grid-template-columns: repeat(4, 1fr); }
+  .seg.four button { padding: 10px 4px; font-size: 14px; }
+  .seg button[disabled] { opacity: .45; cursor: default; transform: none; }
   .seg button {
     display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 8px;
     background: rgba(27,18,56,.85); border: 2px solid #3d3175; border-radius: 16px; font-size: 16px; font-weight: 600;
@@ -263,7 +266,7 @@
     <div class="card">
       <header>
         <h1>Maxim <em>VS</em> Halloween</h1>
-        <p class="tagline">Listen for the ghosts in the dark. Turn, aim, cast!</p>
+        <p class="tagline">Escape the haunted house! Listen for the creatures in the dark. Turn, aim, cast!</p>
       </header>
 
       <section>
@@ -288,7 +291,12 @@
       </section>
 
       <section>
-        <h2><span class="step">3</span>Play</h2>
+        <h2><span class="step">3</span>Start at</h2>
+        <div id="areas" class="seg four"></div>
+      </section>
+
+      <section>
+        <h2><span class="step">4</span>Play</h2>
         <div class="play">
           <button id="play-laptop" class="primary"><svg class="bi"><use href="#i-wand"/></svg> Play on laptop</button>
           <button id="play-vr" disabled><svg class="bi"><use href="#i-vr"/></svg> Enter VR</button>
@@ -312,7 +320,7 @@
           <b>VR:</b> left stick to walk · right stick to turn · point the wand and pull the trigger</p>
       </details>
 
-      <footer><span><svg class="ico"><use href="#i-headphones"/></svg> Headphones make it work</span><span>Version 15 · Oct 25</span></footer>
+      <footer><span><svg class="ico"><use href="#i-headphones"/></svg> Headphones make it work</span><span>Version 16 · Oct 25</span></footer>
     </div>
   </div>
   <script type="module" src="src/main.js"></script>
